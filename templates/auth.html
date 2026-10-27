@@ -1,0 +1,123 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đăng nhập & Đăng ký - Zalo Web</title>
+  <link rel="icon" href="https://zalo-api.zadn.vn/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="{% static 'css/zalo.css' %}">
+  <style>
+    body {
+      background: linear-gradient(135deg, #0068ff 0%, #0091ff 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .auth-page-box {
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      width: 100%;
+      max-width: 440px;
+      padding: 32px;
+    }
+    .auth-brand {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .auth-brand h1 {
+      color: #0068ff;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -1px;
+    }
+    .auth-brand p {
+      color: #72808e;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    .back-home-link {
+      display: block;
+      text-align: center;
+      margin-top: 18px;
+      color: #0068ff;
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-page-box">
+    <div class="auth-brand">
+      <h1>Zalo</h1>
+      <p>Đăng nhập tài khoản Zalo để kết nối với bạn bè</p>
+    </div>
+
+    <!-- Tabs -->
+    <div style="display: flex; border-bottom: 2px solid #e8ecf2; margin-bottom: 20px;">
+      <button class="tab-btn active" id="authTabLogin" style="flex:1; text-align:center; padding: 10px 0; font-size:15px;" onclick="switchAuthTab('login')">Đăng nhập</button>
+      <button class="tab-btn" id="authTabRegister" style="flex:1; text-align:center; padding: 10px 0; font-size:15px;" onclick="switchAuthTab('register')">Đăng ký mới</button>
+    </div>
+
+    <form id="authPageForm" onsubmit="return false;">
+      <div class="form-group-item" style="margin-bottom: 14px;">
+        <label>Tên đăng nhập hoặc Số điện thoại</label>
+        <input type="text" id="authUsername" placeholder="Nhập tài khoản" style="padding: 10px 14px;">
+      </div>
+
+      <div class="form-group-item" style="margin-bottom: 14px;">
+        <label>Mật khẩu</label>
+        <input type="password" id="authPassword" placeholder="Nhập mật khẩu" style="padding: 10px 14px;">
+      </div>
+
+      <div id="registerExtraFields" style="display:none; flex-direction:column; gap:14px; margin-bottom: 14px;">
+        <div class="form-group-item">
+          <label>Họ và tên hiển thị</label>
+          <input type="text" id="regDisplayName" placeholder="Ví dụ: Phạm Huỳnh Quân" style="padding: 10px 14px;">
+        </div>
+        <div class="form-group-item">
+          <label>Số điện thoại</label>
+          <input type="text" id="regPhone" placeholder="Ví dụ: 0901234567" style="padding: 10px 14px;">
+        </div>
+        <div class="form-group-item">
+          <label>Ảnh đại diện (Tùy chọn)</label>
+          <input type="file" id="regAvatarInput" accept="image/*">
+        </div>
+      </div>
+
+      <button type="button" class="btn-primary" id="btnSubmitAuth" style="width: 100%; padding: 12px; font-size: 15px; margin-top: 8px;">
+        Đăng nhập
+      </button>
+
+      <div style="margin-top: 18px; background: #f7f9fa; padding: 12px; border-radius: 8px; font-size: 12px;">
+        <span style="font-weight:600; color:#555;">Đăng nhập nhanh (1-Click):</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+          <button type="button" class="btn-secondary" style="padding: 5px 10px;" onclick="quickLogin('quan')">Quân</button>
+          <button type="button" class="btn-secondary" style="padding: 5px 10px;" onclick="quickLogin('camnt')">Cô Camnt</button>
+          <button type="button" class="btn-secondary" style="padding: 5px 10px;" onclick="quickLogin('bao')">Bảo</button>
+          <button type="button" class="btn-secondary" style="padding: 5px 10px;" onclick="quickLogin('phuc')">Phúc</button>
+        </div>
+      </div>
+    </form>
+
+    <a href="/" class="back-home-link">← Quay lại trang chat chính</a>
+  </div>
+
+  <div class="zalo-toast-container" id="toastContainer"></div>
+  <script src="{% static 'js/zalo.js' %}?v=20261020_v4"></script>
+  <script>
+    // Redirect to home when logged in
+    document.addEventListener('DOMContentLoaded', () => {
+      fetch('/api/me/').then(r => r.json()).then(data => {
+        if (data.authenticated) {
+          window.location.href = '/';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

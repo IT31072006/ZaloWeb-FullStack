@@ -1,0 +1,12 @@
+# Danh sách các thư viện phụ thuộc cho dự án Zalo Web (LTM)
+# Cài đặt: pip install -r requirements.txt
+
+django>=6.0.0
+daphne>=4.2.0
+channels>=4.3.0
+djangorestframework>=3.16.0
+django-cors-headers>=4.7.0
+psycopg>=3.2.0
+pillow>=11.0.0
+requests>=2.32.0
+websockets>=15.0
