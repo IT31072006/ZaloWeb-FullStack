@@ -149,10 +149,14 @@
 
         <div class="chat-header-right">
           <!-- WebSocket RTT Latency Indicator (LTM Network Performance) -->
-          <div class="network-latency-badge" id="networkLatencyBadge" title="Độ trễ truyền tin WebSocket (Round-Trip Time - RFC 6455)">
+          <div class="network-latency-badge" id="networkLatencyBadge" title="Độ trễ truyền tin WebSocket (Round-Trip Time - RFC 6455). Nhấp để mở Network Inspector">
             <span class="latency-dot"></span>
             <span class="latency-text" id="latencyText">-- ms</span>
           </div>
+
+          <button class="header-icon-btn" id="btnOpenNetworkInspector" title="Network & Socket Inspector (RFC 6455 & WebRTC)">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          </button>
 
           <button class="header-icon-btn" id="btnCallVoice" title="Cuộc gọi thoại">
             <svg viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
@@ -202,6 +206,32 @@
           <button class="pinned-action-btn" id="btnUnpinMessage" title="Bỏ ghim tin nhắn">
             <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
+        </div>
+      </div>
+
+      <!-- Cloud Storage View Banner & Category Filter Chips (My Cloud Drive View) -->
+      <div class="cloud-storage-banner" id="cloudStorageBanner" style="display: none;">
+        <div class="cloud-storage-header">
+          <div class="cloud-storage-info">
+            <div class="cloud-storage-icon">☁️</div>
+            <div class="cloud-storage-details">
+              <div class="cloud-storage-title">
+                <strong>Cloud của tôi</strong>
+                <span class="cloud-storage-metric" id="cloudStorageMetric">Đã dùng 0 MB / 1024 MB (0%)</span>
+              </div>
+              <div class="cloud-progress-track">
+                <div class="cloud-progress-fill" id="cloudProgressFill" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cloud-category-chips" id="cloudCategoryChips">
+          <button class="cloud-cat-chip active" data-cat="all">📁 Tất cả</button>
+          <button class="cloud-cat-chip" data-cat="image">🖼️ Hình ảnh</button>
+          <button class="cloud-cat-chip" data-cat="file">📄 Tài liệu</button>
+          <button class="cloud-cat-chip" data-cat="code">💻 Mã nguồn</button>
+          <button class="cloud-cat-chip" data-cat="voice">🎙️ Tin thoại</button>
+          <button class="cloud-cat-chip" data-cat="link">🔗 Liên kết</button>
         </div>
       </div>
 
@@ -356,8 +386,19 @@
 
       <div class="info-sidebar-body">
         <div class="info-avatar-section">
-          <img id="infoPanelAvatar" src="https://ui-avatars.com/api/?name=Chat&background=0068ff&color=ffffff" alt="Avatar">
-          <h4 id="infoPanelTitle">2026_2027_VKU_LTM(5)</h4>
+          <div class="info-avatar-wrapper">
+            <img id="infoPanelAvatar" src="https://ui-avatars.com/api/?name=Chat&background=0068ff&color=ffffff" alt="Avatar">
+            <button class="info-avatar-edit-badge" id="btnChangeGroupAvatar" title="Đổi ảnh đại diện nhóm" style="display: none;">
+              <svg viewBox="0 0 24 24"><path d="M3 4V1h2v3h3v2H5v3H3V6H0V4h3zm3 6V7h3V4h7l1.83 2H21c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V10h3zm7 9c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-3.2-5c0 1.77 1.43 3.2 3.2 3.2s3.2-1.43 3.2-3.2-1.43-3.2-3.2-3.2-3.2 1.43-3.2 3.2z"/></svg>
+            </button>
+            <input type="file" id="groupAvatarFileInput" accept="image/*" style="display: none;">
+          </div>
+          <div class="info-title-row">
+            <h4 id="infoPanelTitle">2026_2027_VKU_LTM(5)</h4>
+            <button class="info-edit-title-btn" id="btnEditGroupName" title="Đổi tên nhóm" style="display: none;">
+              <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+            </button>
+          </div>
           <p id="infoPanelSubtitle">66 thành viên</p>
         </div>
 
@@ -411,6 +452,20 @@
           </div>
           <div class="accordion-content" id="infoFilesContainer">
             <!-- Shared files rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Section 4: Group Administration & Actions (Leave / Disband) -->
+        <div class="info-accordion-section group-danger-section" id="groupDangerSection" style="display: none;">
+          <div class="group-actions-container">
+            <button class="btn-group-action leave" id="btnLeaveGroup" title="Rời khỏi nhóm">
+              <svg viewBox="0 0 24 24"><path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+              <span>Rời khỏi nhóm</span>
+            </button>
+            <button class="btn-group-action disband" id="btnDisbandGroup" title="Giải tán nhóm" style="display: none;">
+              <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              <span>Giải tán nhóm</span>
+            </button>
           </div>
         </div>
       </div>
@@ -868,6 +923,11 @@
           <svg viewBox="0 0 24 24" class="icon-cam-on" id="camIconOn"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
           <svg viewBox="0 0 24 24" class="icon-cam-off" id="camIconOff" style="display: none;"><path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.54-.18L19.73 21 21 19.73 3.27 2zM5 16V8h1.27l8 8H5z"/></svg>
         </button>
+        <button class="call-ctrl-btn" id="btnToggleScreenShare" title="Chia sẻ màn hình máy tính (Screen Sharing)">
+          <svg viewBox="0 0 24 24" class="icon-screen-share">
+            <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6zm9 7h-2v-2H9l3-3 3 3h-2v2z"/>
+          </svg>
+        </button>
         <button class="call-ctrl-btn end-call" id="btnEndCall" title="Kết thúc cuộc gọi">
           <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
         </button>
@@ -987,10 +1047,104 @@
     </div>
   </div>
 
+  <!-- ====================================================================
+       15. NETWORK & SOCKET MONITOR MODAL (LẬP TRÌNH MẠNG - RFC 6455 & WebRTC)
+       ==================================================================== -->
+  <div class="modal-overlay" id="networkInspectorModal" style="display: none;">
+    <div class="zalo-modal-card network-inspector-card">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span class="live-stream-badge">LIVE MONITOR</span>
+          <h3 style="margin: 0; font-size: 16px;">Bảng Điều Khiển Giám Sát Mạng (Network & Socket Inspector)</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeModal('networkInspectorModal')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 18px 24px;">
+        <p class="network-inspector-desc">
+          Theo dõi lưu lượng gói tin thời gian thực qua giao thức <strong>WebSocket (RFC 6455)</strong>, cơ chế đóng gói <strong>TCP Length-Prefixed Framing</strong>, và kết nối ngang hàng <strong>WebRTC P2P ICE</strong>.
+        </p>
+
+        <!-- Metric Cards Grid -->
+        <div class="network-metrics-grid">
+          <div class="network-metric-card">
+            <div class="net-card-label">WebSocket RTT Latency</div>
+            <div class="net-card-val text-green" id="netInspectorLatency">-- ms</div>
+            <div class="net-card-sub" id="netInspectorStatus">WebSocket OPEN (1)</div>
+          </div>
+          <div class="network-metric-card">
+            <div class="net-card-label">Gói tin TX / RX</div>
+            <div class="net-card-val" id="netInspectorPackets">0 / 0</div>
+            <div class="net-card-sub">Frames truyền / nhận</div>
+          </div>
+          <div class="network-metric-card">
+            <div class="net-card-label">Lưu lượng truyền tải</div>
+            <div class="net-card-val" id="netInspectorBytes">0 KB / 0 KB</div>
+            <div class="net-card-sub">Sent / Received Bytes</div>
+          </div>
+          <div class="network-metric-card">
+            <div class="net-card-label">WebRTC P2P ICE</div>
+            <div class="net-card-val text-blue" id="netInspectorIceState">Idle / Not Connected</div>
+            <div class="net-card-sub">STUN: stun.l.google.com:19302</div>
+          </div>
+        </div>
+
+        <!-- Protocol & Framing Architecture Details -->
+        <div class="network-details-box">
+          <div class="net-detail-row">
+            <span class="net-detail-k">Giao thức Tầng Ứng Dụng:</span>
+            <span class="net-detail-v">WebSocket (RFC 6455) Full-Duplex over TCP/IP (Port 8000 / Daphne ASGI)</span>
+          </div>
+          <div class="net-detail-row">
+            <span class="net-detail-k">Cơ Chế Bắt Tay (Handshake):</span>
+            <span class="net-detail-v">HTTP/1.1 Upgrade: websocket | Sec-WebSocket-Key | 101 Switching Protocols</span>
+          </div>
+          <div class="net-detail-row">
+            <span class="net-detail-k">TCP Socket Framing (Python Server):</span>
+            <span class="net-detail-v">4-byte Big-Endian Length Prefix (struct.pack('!I', len) chống dính gói tin)</span>
+          </div>
+          <div class="net-detail-row">
+            <span class="net-detail-k">Signaling Server WebRTC:</span>
+            <span class="net-detail-v">SDP Offer/Answer & ICE Candidates trao đổi tức thời qua Django Channels</span>
+          </div>
+        </div>
+
+        <!-- Live Socket Stream Packet Log -->
+        <div class="net-log-header">
+          <h4 style="margin: 0; font-size: 13.5px; font-weight: 700;">Nhật ký gói tin truyền qua Socket (Live Packet Log)</h4>
+          <div class="net-log-actions">
+            <button class="btn-sm-action" id="btnSendManualPing">📡 Ping Test RTT</button>
+            <button class="btn-sm-action" id="btnClearNetLogs">🗑️ Xóa Log</button>
+          </div>
+        </div>
+
+        <div class="packet-log-table-container">
+          <table class="packet-log-table">
+            <thead>
+              <tr>
+                <th style="width: 75px;">Thời gian</th>
+                <th style="width: 55px;">Chiều</th>
+                <th style="width: 130px;">Sự kiện (Event)</th>
+                <th style="width: 85px;">Kích thước</th>
+                <th>Dữ liệu gói tin (Payload)</th>
+              </tr>
+            </thead>
+            <tbody id="packetLogTableBody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <span class="net-server-badge">Server: Daphne ASGI / Redis InMemory Channel Layer</span>
+        <button class="btn-primary" onclick="closeModal('networkInspectorModal')">Đóng</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="zalo-toast-container" id="toastContainer"></div>
 
   <!-- JavaScript application logic -->
-  <script src="{% static 'js/zalo.js' %}?v=20261020_v6"></script>
+  <script src="{% static 'js/zalo.js' %}?v=20261020_v7"></script>
 </body>
 </html>

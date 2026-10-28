@@ -307,6 +307,8 @@ def api_conversation_detail(request, conversation_id):
         'is_pinned': membership.is_pinned if membership else False,
         'is_muted': membership.is_muted if membership else False,
         'is_priority': membership.is_priority if membership else True,
+        'my_role': membership.role if membership else 'member',
+        'created_by_id': conversation.created_by_id,
         'pinned_message': pinned_info,
     })
 
@@ -558,8 +560,8 @@ def api_create_conversation(request):
     user = request.user
     is_group = request.data.get('is_group', False)
     target_user_id = request.data.get('user_id')
-    group_name = request.data.get('name', '').strip()
-    member_ids = request.data.get('members', [])
+    group_name = (request.data.get('name') or request.data.get('title') or '').strip()
+    member_ids = request.data.get('members') or request.data.get('member_ids') or []
 
     if not is_group and target_user_id:
         target_user = get_object_or_404(User, id=target_user_id)
@@ -610,11 +612,29 @@ def api_cloud(request):
             content='Chào mừng đến với Cloud của tôi! Nơi lưu trữ an toàn các văn bản, tệp tin và đoạn code của riêng bạn.'
         )
 
+    # Tính toán dung lượng lưu trữ Cloud thực tế
+    total_bytes = 0
+    for m in cloud_conv.messages.all():
+        if m.attachment:
+            try:
+                total_bytes += m.attachment.size
+            except Exception:
+                pass
+        if m.content:
+            total_bytes += len(m.content.encode('utf-8'))
+
+    storage_mb = round(total_bytes / (1024 * 1024), 2)
+    storage_percent = round((storage_mb / 1024.0) * 100, 1)
+
     return Response({
         'id': cloud_conv.id,
         'title': 'Cloud của tôi',
         'is_cloud': True,
-        'avatar_url': cloud_conv.get_avatar_for_user(user)
+        'avatar_url': cloud_conv.get_avatar_for_user(user),
+        'storage_used_bytes': total_bytes,
+        'storage_used_mb': storage_mb,
+        'storage_limit_mb': 1024,
+        'storage_percent': max(storage_percent, 0.1) if total_bytes > 0 else 0
     })
 
 
@@ -1147,6 +1167,235 @@ def api_forward_message(request, message_id):
         'message': f'Đã chuyển tiếp tin nhắn tới {forwarded_count} cuộc trò chuyện!',
         'forwarded_count': forwarded_count
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def api_update_group(request, conversation_id):
+    """Cập nhật tên hoặc ảnh đại diện của nhóm chat."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, is_group=True, memberships__user=user)
+
+    membership = conversation.memberships.filter(user=user).first()
+    if not membership:
+        return Response({'error': 'Bạn không có quyền quản trị nhóm này!'}, status=status.HTTP_403_FORBIDDEN)
+
+    name = request.data.get('name') or request.data.get('title')
+    if name and name.strip():
+        conversation.name = name.strip()
+
+    if 'avatar' in request.FILES:
+        conversation.avatar = request.FILES['avatar']
+
+    conversation.updated_at = timezone.now()
+    conversation.save()
+
+    user_name = user.profile.get_display_name() if hasattr(user, 'profile') else user.username
+    sys_msg = Message.objects.create(
+        conversation=conversation,
+        sender=None,
+        message_type='system',
+        content=f"{user_name} đã cập nhật thông tin nhóm."
+    )
+
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            serializer = MessageSerializer(sys_msg, context={'request': request})
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{conversation.id}",
+                {
+                    'type': 'broadcast_message',
+                    'message': serializer.data
+                }
+            )
+    except Exception:
+        pass
+
+    return Response({
+        'message': 'Đã cập nhật thông tin nhóm thành công!',
+        'title': conversation.name,
+        'avatar_url': conversation.get_avatar_for_user(user)
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_remove_group_member(request, conversation_id):
+    """Trưởng nhóm xóa thành viên khỏi nhóm chat."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, is_group=True, memberships__user=user)
+
+    my_membership = conversation.memberships.filter(user=user).first()
+    if not my_membership or my_membership.role != 'admin':
+        return Response({'error': 'Chỉ có Trưởng nhóm mới có quyền xóa thành viên!'}, status=status.HTTP_403_FORBIDDEN)
+
+    target_user_id = request.data.get('user_id')
+    if not target_user_id or int(target_user_id) == user.id:
+        return Response({'error': 'Yêu cầu không hợp lệ!'}, status=status.HTTP_400_BAD_REQUEST)
+
+    target_membership = conversation.memberships.filter(user_id=target_user_id).first()
+    if not target_membership:
+        return Response({'error': 'Thành viên không tồn tại trong nhóm!'}, status=status.HTTP_404_NOT_FOUND)
+
+    target_user = target_membership.user
+    target_name = target_user.profile.get_display_name() if hasattr(target_user, 'profile') else target_user.username
+    admin_name = user.profile.get_display_name() if hasattr(user, 'profile') else user.username
+    target_membership.delete()
+
+    sys_msg = Message.objects.create(
+        conversation=conversation,
+        sender=None,
+        message_type='system',
+        content=f"{admin_name} đã xóa {target_name} khỏi nhóm."
+    )
+
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            serializer = MessageSerializer(sys_msg, context={'request': request})
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{conversation.id}",
+                {
+                    'type': 'broadcast_message',
+                    'message': serializer.data
+                }
+            )
+    except Exception:
+        pass
+
+    return Response({'message': f'Đã xóa {target_name} khỏi nhóm!'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_leave_group(request, conversation_id):
+    """Rời khỏi nhóm trò chuyện."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, is_group=True, memberships__user=user)
+
+    my_membership = conversation.memberships.filter(user=user).first()
+    if not my_membership:
+        return Response({'error': 'Bạn không phải thành viên của nhóm!'}, status=status.HTTP_400_BAD_REQUEST)
+
+    is_admin = (my_membership.role == 'admin')
+    user_name = user.profile.get_display_name() if hasattr(user, 'profile') else user.username
+    my_membership.delete()
+
+    remaining_members = conversation.memberships.all()
+    if not remaining_members.exists():
+        conversation.delete()
+        return Response({'message': 'Bạn đã rời nhóm. Nhóm đã được giải tán do không còn thành viên.'})
+
+    if is_admin:
+        new_admin_m = remaining_members.first()
+        new_admin_m.role = 'admin'
+        new_admin_m.save(update_fields=['role'])
+        new_admin_name = new_admin_m.user.profile.get_display_name() if hasattr(new_admin_m.user, 'profile') else new_admin_m.user.username
+        sys_msg = Message.objects.create(
+            conversation=conversation,
+            sender=None,
+            message_type='system',
+            content=f"{user_name} đã rời nhóm. {new_admin_name} được chỉ định làm Trưởng nhóm mới."
+        )
+    else:
+        sys_msg = Message.objects.create(
+            conversation=conversation,
+            sender=None,
+            message_type='system',
+            content=f"{user_name} đã rời khỏi nhóm."
+        )
+
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            serializer = MessageSerializer(sys_msg, context={'request': request})
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{conversation.id}",
+                {
+                    'type': 'broadcast_message',
+                    'message': serializer.data
+                }
+            )
+    except Exception:
+        pass
+
+    return Response({'message': 'Đã rời khỏi nhóm thành công!'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_change_member_role(request, conversation_id):
+    """Trưởng nhóm phân quyền hoặc chuyển quyền trưởng nhóm."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, is_group=True, memberships__user=user)
+
+    my_membership = conversation.memberships.filter(user=user).first()
+    if not my_membership or my_membership.role != 'admin':
+        return Response({'error': 'Chỉ có Trưởng nhóm mới có quyền phân quyền!'}, status=status.HTTP_403_FORBIDDEN)
+
+    target_user_id = request.data.get('user_id')
+    new_role = request.data.get('role', 'admin')
+
+    target_membership = conversation.memberships.filter(user_id=target_user_id).first()
+    if not target_membership:
+        return Response({'error': 'Không tìm thấy thành viên!'}, status=status.HTTP_404_NOT_FOUND)
+
+    target_membership.role = new_role
+    target_membership.save(update_fields=['role'])
+
+    target_name = target_membership.user.profile.get_display_name() if hasattr(target_membership.user, 'profile') else target_membership.user.username
+    admin_name = user.profile.get_display_name() if hasattr(user, 'profile') else user.username
+
+    role_label = "Trưởng nhóm" if new_role == 'admin' else "Thành viên"
+    sys_msg = Message.objects.create(
+        conversation=conversation,
+        sender=None,
+        message_type='system',
+        content=f"{admin_name} đã chỉ định {target_name} làm {role_label}."
+    )
+
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            serializer = MessageSerializer(sys_msg, context={'request': request})
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{conversation.id}",
+                {
+                    'type': 'broadcast_message',
+                    'message': serializer.data
+                }
+            )
+    except Exception:
+        pass
+
+    return Response({'message': f'Đã cập nhật vai trò của {target_name} thành {role_label}!'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_disband_group(request, conversation_id):
+    """Trưởng nhóm giải tán nhóm chat."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, is_group=True, memberships__user=user)
+
+    my_membership = conversation.memberships.filter(user=user).first()
+    if not my_membership or my_membership.role != 'admin':
+        return Response({'error': 'Chỉ có Trưởng nhóm mới có quyền giải tán nhóm!'}, status=status.HTTP_403_FORBIDDEN)
+
+    conversation_name = conversation.name or "Nhóm chat"
+    conversation.delete()
+    return Response({'message': f'Đã giải tán nhóm "{conversation_name}" thành công!'})
+
 
 
 

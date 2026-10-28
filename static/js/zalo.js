@@ -61,8 +61,67 @@ const state = {
   activeContextMsgId: null,
   forwardingMsg: null,
   selectedForwardConvIds: new Set(),
-  pastedImageFile: null
+  pastedImageFile: null,
+
+  // Phase 5: Advanced Features
+  isScreenSharing: false,
+  screenStream: null,
+  cloudFilterCat: 'all'
 };
+
+// Network & Socket Monitor Global Stats (LTM Performance)
+const networkStats = {
+  packetsSent: 0,
+  packetsReceived: 0,
+  bytesSent: 0,
+  bytesReceived: 0,
+  logs: []
+};
+
+function formatBytes(bytes) {
+  if (bytes === 0 || !bytes) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function logPacket(direction, eventType, payload, byteSize) {
+  const now = new Date();
+  const timeStr = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  
+  if (direction === 'TX') {
+    networkStats.packetsSent++;
+    networkStats.bytesSent += byteSize;
+  } else {
+    networkStats.packetsReceived++;
+    networkStats.bytesReceived += byteSize;
+  }
+
+  let payloadStr = '';
+  try {
+    payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  } catch (e) {
+    payloadStr = String(payload);
+  }
+
+  networkStats.logs.unshift({
+    time: timeStr,
+    dir: direction,
+    event: eventType || 'frame',
+    size: byteSize,
+    payload: payloadStr
+  });
+
+  if (networkStats.logs.length > 80) {
+    networkStats.logs.pop();
+  }
+
+  const modal = document.getElementById('networkInspectorModal');
+  if (modal && modal.style.display !== 'none') {
+    updateNetworkInspectorUI();
+  }
+}
 
 // Emoji Data Library
 const EMOJIS = {
@@ -528,6 +587,17 @@ async function selectConversation(convId) {
     // Update Pinned Message Banner
     updatePinnedMessageBanner(conv.pinned_message);
 
+    // Update Cloud Storage Banner (My Cloud Drive View)
+    const cloudBanner = document.getElementById('cloudStorageBanner');
+    if (cloudBanner) {
+      if (conv.is_cloud || conv.title === 'Cloud của tôi') {
+        cloudBanner.style.display = 'flex';
+        loadCloudStorageMetrics();
+      } else {
+        cloudBanner.style.display = 'none';
+      }
+    }
+
     // Update Right Info Sidebar if open
     updateConversationInfoPanel(conv);
 
@@ -555,6 +625,14 @@ function updateConversationInfoPanel(conv) {
     panelSub.innerText = conv.is_group ? `${conv.member_count} thành viên` : 'Hội thoại trực tiếp 1-1';
   }
 
+  // Group Admin buttons
+  const isAdmin = (conv.my_role === 'admin');
+  const btnAvatar = document.getElementById('btnChangeGroupAvatar');
+  if (btnAvatar) btnAvatar.style.display = (conv.is_group && isAdmin) ? 'flex' : 'none';
+
+  const btnEditName = document.getElementById('btnEditGroupName');
+  if (btnEditName) btnEditName.style.display = (conv.is_group && isAdmin) ? 'flex' : 'none';
+
   // Members
   const memberCountSpan = document.getElementById('infoMemberCount');
   if (memberCountSpan) memberCountSpan.innerText = conv.members ? conv.members.length : 0;
@@ -565,16 +643,46 @@ function updateConversationInfoPanel(conv) {
     conv.members.forEach(m => {
       const row = document.createElement('div');
       row.className = 'info-member-row';
-      const roleLabel = m.role === 'admin' ? '<span class="info-role-badge">Trưởng nhóm</span>' : '';
+
+      let roleLabel = '';
+      if (m.role === 'admin') {
+        roleLabel = '<span class="role-badge admin">Trưởng nhóm</span>';
+      } else if (m.role === 'deputy') {
+        roleLabel = '<span class="role-badge deputy">Phó nhóm</span>';
+      }
+
+      let adminActions = '';
+      if (conv.is_group && isAdmin && m.id !== state.currentUser?.id) {
+        adminActions = `
+          <div class="member-manage-menu">
+            <button class="btn-member-action" onclick="transferGroupAdmin(${m.id}, '${escapeHtml(m.display_name)}')">Chuyển quyền</button>
+            <button class="btn-member-action danger" onclick="removeMemberFromGroup(${m.id}, '${escapeHtml(m.display_name)}')">Xóa</button>
+          </div>
+        `;
+      }
+
       row.innerHTML = `
         <div class="info-member-left">
           <img src="${m.avatar_url}" alt="${escapeHtml(m.display_name)}">
           <span class="info-member-name">${escapeHtml(m.display_name)}</span>
+          ${roleLabel}
         </div>
-        ${roleLabel}
+        ${adminActions}
       `;
       membersContainer.appendChild(row);
     });
+  }
+
+  // Group Danger Section
+  const dangerSection = document.getElementById('groupDangerSection');
+  const btnDisband = document.getElementById('btnDisbandGroup');
+  if (dangerSection) {
+    if (conv.is_group) {
+      dangerSection.style.display = 'block';
+      if (btnDisband) btnDisband.style.display = isAdmin ? 'flex' : 'none';
+    } else {
+      dangerSection.style.display = 'none';
+    }
   }
 
   // Media
@@ -912,14 +1020,31 @@ function renderTimeline() {
   const timeline = document.getElementById('chatTimeline');
   if (!timeline) return;
 
-  if (state.messages.length === 0) {
+  let messagesToRender = state.messages;
+
+  // If in My Cloud Drive, apply category filter chip
+  const isCloud = state.currentConversation?.is_cloud || state.currentConversation?.title === 'Cloud của tôi';
+  if (isCloud && state.cloudFilterCat && state.cloudFilterCat !== 'all') {
+    messagesToRender = state.messages.filter(msg => {
+      if (state.cloudFilterCat === 'image') return msg.message_type === 'image';
+      if (state.cloudFilterCat === 'file') return msg.message_type === 'file';
+      if (state.cloudFilterCat === 'code') return msg.message_type === 'code';
+      if (state.cloudFilterCat === 'voice') return msg.message_type === 'audio';
+      if (state.cloudFilterCat === 'link') {
+        return msg.content && (msg.content.includes('http://') || msg.content.includes('https://'));
+      }
+      return true;
+    });
+  }
+
+  if (messagesToRender.length === 0) {
     const convTitle = state.currentConversation?.title || 'Cuộc trò chuyện';
     const convAvatar = state.currentConversation?.avatar_url || 'https://ui-avatars.com/api/?name=Chat&background=0068ff&color=ffffff';
     timeline.innerHTML = `
       <div class="empty-chat-state" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; text-align:center; padding:32px 16px; color:var(--zalo-text-muted);">
         <img src="${convAvatar}" style="width:72px; height:72px; border-radius:50%; object-fit:cover; margin-bottom:14px; box-shadow:0 4px 12px rgba(0,0,0,0.08);">
         <h4 style="margin:0 0 6px 0; color:var(--zalo-text-main); font-size:16px; font-weight:600;">${escapeHtml(convTitle)}</h4>
-        <p style="margin:0; font-size:13px; max-width:320px; line-height:1.5;">Chưa có tin nhắn nào trong cuộc trò chuyện này.<br>Hãy gửi lời chào hoặc nhập tin nhắn bên dưới để bắt đầu!</p>
+        <p style="margin:0; font-size:13px; max-width:320px; line-height:1.5;">${isCloud && state.cloudFilterCat !== 'all' ? 'Không tìm thấy mục nào thuộc danh mục này trong Cloud.' : 'Chưa có tin nhắn nào trong cuộc trò chuyện này.<br>Hãy gửi lời chào hoặc nhập tin nhắn bên dưới để bắt đầu!'}</p>
       </div>
     `;
     return;
@@ -928,7 +1053,7 @@ function renderTimeline() {
   timeline.innerHTML = '';
   let lastDateKey = null;
 
-  state.messages.forEach(msg => {
+  messagesToRender.forEach(msg => {
     const msgDateKey = getMessageDateKey(msg.created_at);
     if (msgDateKey && msgDateKey !== lastDateKey) {
       lastDateKey = msgDateKey;
@@ -2889,6 +3014,16 @@ function connectWebSocket(convId) {
     const socket = new WebSocket(wsUrl);
     state.chatSocket = socket;
 
+    // Wrap socket.send for full live packet telemetry (LTM Network Performance)
+    const rawSend = socket.send.bind(socket);
+    socket.send = (data) => {
+      const size = typeof data === 'string' ? new Blob([data]).size : (data.byteLength || 0);
+      let parsed = null;
+      try { parsed = JSON.parse(data); } catch(e) {}
+      logPacket('TX', parsed?.type || parsed?.action || 'json', parsed || data, size);
+      return rawSend(data);
+    };
+
     socket.onopen = () => {
       state.isWsConnected = true;
       console.log(`[WebSocket] Đã kết nối kênh chat ws:// cho hội thoại #${convId}`);
@@ -2901,13 +3036,19 @@ function connectWebSocket(convId) {
         const dot = subtitle.querySelector('.online-indicator');
         if (dot) dot.style.backgroundColor = '#10b981';
       }
+      if (document.getElementById('networkInspectorModal')?.style.display !== 'none') {
+        updateNetworkInspectorUI();
+      }
     };
 
     socket.onmessage = (e) => {
+      const size = typeof e.data === 'string' ? new Blob([e.data]).size : (e.data.byteLength || 0);
       try {
         const data = JSON.parse(e.data);
+        logPacket('RX', data.type || data.action || 'json', data, size);
         handleWebSocketMessage(data);
       } catch (err) {
+        logPacket('RX', 'raw', e.data, size);
         console.error("[WebSocket] Lỗi xử lý gói tin:", err);
       }
     };
@@ -2916,6 +3057,9 @@ function connectWebSocket(convId) {
       state.isWsConnected = false;
       stopWebSocketPing();
       updateLatencyBadge(null);
+      if (document.getElementById('networkInspectorModal')?.style.display !== 'none') {
+        updateNetworkInspectorUI();
+      }
       console.log("[WebSocket] Đã đóng kết nối (code:", e.code, ")");
     };
 
@@ -2924,6 +3068,9 @@ function connectWebSocket(convId) {
       state.isWsConnected = false;
       stopWebSocketPing();
       updateLatencyBadge(null);
+      if (document.getElementById('networkInspectorModal')?.style.display !== 'none') {
+        updateNetworkInspectorUI();
+      }
     };
   } catch (err) {
     console.warn("[WebSocket] Không thể khởi tạo kết nối socket:", err);
@@ -3740,8 +3887,392 @@ function endWebRTCCall(sendSignal = true) {
   const peerMicBadge = document.getElementById('callPeerMicBadge');
   if (peerMicBadge) peerMicBadge.style.display = 'none';
 
+  if (state.screenStream) {
+    state.screenStream.getTracks().forEach(t => t.stop());
+    state.screenStream = null;
+  }
+  state.isScreenSharing = false;
+  const btnScreen = document.getElementById('btnToggleScreenShare');
+  if (btnScreen) btnScreen.classList.remove('screen-share-active');
+  const screenPill = document.getElementById('screenShareIndicatorPill');
+  if (screenPill) screenPill.remove();
+
   const card = document.getElementById('callWindowCard');
   if (card) card.classList.remove('fullscreen');
+}
+
+// ==============================================================================
+// 11.4 WEBRTC SCREEN SHARING, GROUP MANAGEMENT & NETWORK INSPECTOR FUNCTIONS
+// ==============================================================================
+
+// 1. WebRTC Screen Sharing (2.1)
+async function toggleScreenShare() {
+  if (!state.peerConnection) {
+    showToast("Cuộc gọi chưa được kết nối!");
+    return;
+  }
+
+  const btn = document.getElementById('btnToggleScreenShare');
+  const videoStage = document.getElementById('callVideoStage');
+  const localVideo = document.getElementById('localVideo');
+
+  if (state.isScreenSharing) {
+    // Stop sharing
+    if (state.screenStream) {
+      state.screenStream.getTracks().forEach(t => t.stop());
+      state.screenStream = null;
+    }
+    state.isScreenSharing = false;
+    if (btn) btn.classList.remove('screen-share-active');
+    const existingPill = document.getElementById('screenShareIndicatorPill');
+    if (existingPill) existingPill.remove();
+
+    // Revert video track to camera track
+    if (state.localStream) {
+      const camTrack = state.localStream.getVideoTracks()[0];
+      const videoSender = state.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (videoSender && camTrack) {
+        await videoSender.replaceTrack(camTrack);
+      }
+      if (localVideo) localVideo.srcObject = state.localStream;
+    }
+    showToast("Đã dừng chia sẻ màn hình.");
+  } else {
+    // Start screen sharing
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always' },
+        audio: false
+      });
+      state.screenStream = screenStream;
+      const screenTrack = screenStream.getVideoTracks()[0];
+
+      screenTrack.onended = () => {
+        if (state.isScreenSharing) {
+          toggleScreenShare();
+        }
+      };
+
+      const videoSender = state.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        await videoSender.replaceTrack(screenTrack);
+      } else {
+        state.peerConnection.addTrack(screenTrack, screenStream);
+      }
+
+      if (localVideo) {
+        localVideo.srcObject = screenStream;
+      }
+
+      state.isScreenSharing = true;
+      if (btn) btn.classList.add('screen-share-active');
+
+      if (videoStage && !document.getElementById('screenShareIndicatorPill')) {
+        const pill = document.createElement('div');
+        pill.id = 'screenShareIndicatorPill';
+        pill.className = 'screen-share-indicator-pill';
+        pill.innerHTML = '<span class="pulse-dot"></span> Đang chia sẻ màn hình máy tính';
+        videoStage.appendChild(pill);
+      }
+
+      showToast("🖥️ Đang chia sẻ màn hình của bạn!");
+    } catch (err) {
+      console.warn("Screen share cancelled/error:", err);
+      if (err.name !== 'NotAllowedError') {
+        showToast("Không thể chia sẻ màn hình: " + (err.message || err));
+      }
+    }
+  }
+}
+
+// 2. Group Management Functions (2.3)
+async function editGroupName() {
+  if (!state.currentConversation || !state.currentConversation.is_group) return;
+  const currentTitle = state.currentConversation.title || '';
+  const newName = prompt("Nhập tên mới cho nhóm trò chuyện:", currentTitle);
+  if (!newName || !newName.trim() || newName.trim() === currentTitle) return;
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/update_group/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({ name: newName.trim() })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Đã đổi tên nhóm thành công!");
+      state.currentConversation.title = data.title || newName.trim();
+      const titleElem = document.getElementById('currentChatTitle');
+      if (titleElem) titleElem.innerText = state.currentConversation.title;
+      const infoTitleElem = document.getElementById('infoPanelTitle');
+      if (infoTitleElem) infoTitleElem.innerText = state.currentConversation.title;
+      loadConversations();
+    } else {
+      showToast(data.error || "Không thể cập nhật tên nhóm!");
+    }
+  } catch (err) {
+    showToast("Lỗi kết nối khi đổi tên nhóm!");
+  }
+}
+
+async function handleGroupAvatarSelected(e) {
+  const file = e.target.files?.[0];
+  if (!file || !state.currentConversationId) return;
+
+  const formData = new FormData();
+  formData.append('avatar', file);
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/update_group/`, {
+      method: 'POST',
+      headers: {
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: formData
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast("Đã đổi ảnh đại diện nhóm!");
+      if (data.avatar_url) {
+        state.currentConversation.avatar_url = data.avatar_url;
+        const currentAvatar = document.getElementById('currentChatAvatar');
+        if (currentAvatar) currentAvatar.src = data.avatar_url;
+        const infoAvatar = document.getElementById('infoPanelAvatar');
+        if (infoAvatar) infoAvatar.src = data.avatar_url;
+      }
+      loadConversations();
+    } else {
+      showToast(data.error || "Không thể cập nhật ảnh nhóm!");
+    }
+  } catch (err) {
+    showToast("Lỗi tải lên ảnh nhóm!");
+  } finally {
+    e.target.value = '';
+  }
+}
+
+async function removeMemberFromGroup(userId, memberName) {
+  if (!state.currentConversationId) return;
+  if (!confirm(`Bạn có chắc muốn xóa thành viên "${memberName}" khỏi nhóm?`)) return;
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/remove_member/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({ user_id: userId })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || `Đã xóa ${memberName} khỏi nhóm!`);
+      selectConversation(state.currentConversationId);
+    } else {
+      showToast(data.error || "Không thể xóa thành viên!");
+    }
+  } catch (err) {
+    showToast("Lỗi khi xóa thành viên!");
+  }
+}
+
+async function transferGroupAdmin(userId, memberName) {
+  if (!state.currentConversationId) return;
+  if (!confirm(`Bạn có chắc muốn chuyển quyền Trưởng nhóm cho "${memberName}"?`)) return;
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/change_role/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({ user_id: userId, role: 'admin' })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Đã chuyển quyền Trưởng nhóm!");
+      selectConversation(state.currentConversationId);
+    } else {
+      showToast(data.error || "Không thể chuyển quyền trưởng nhóm!");
+    }
+  } catch (err) {
+    showToast("Lỗi khi chuyển quyền trưởng nhóm!");
+  }
+}
+
+async function leaveCurrentGroup() {
+  if (!state.currentConversation || !state.currentConversationId) return;
+  if (!confirm(`Bạn có chắc muốn rời khỏi nhóm "${state.currentConversation.title}"?`)) return;
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/leave/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') }
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Đã rời khỏi nhóm!");
+      state.currentConversationId = null;
+      state.currentConversation = null;
+      document.getElementById('chatInfoSidebar').style.display = 'none';
+      await loadConversations();
+      if (state.conversations && state.conversations.length > 0) {
+        selectConversation(state.conversations[0].id);
+      }
+    } else {
+      showToast(data.error || "Không thể rời nhóm!");
+    }
+  } catch (err) {
+    showToast("Lỗi khi rời khỏi nhóm!");
+  }
+}
+
+async function disbandCurrentGroup() {
+  if (!state.currentConversation || !state.currentConversationId) return;
+  if (!confirm(`CẢNH BÁO: Bạn có chắc muốn GIẢI TÁN nhóm "${state.currentConversation.title}"? Tất cả thành viên sẽ bị xóa khỏi nhóm.`)) return;
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/disband/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') }
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(data.message || "Nhóm đã được giải tán!");
+      state.currentConversationId = null;
+      state.currentConversation = null;
+      document.getElementById('chatInfoSidebar').style.display = 'none';
+      await loadConversations();
+      if (state.conversations && state.conversations.length > 0) {
+        selectConversation(state.conversations[0].id);
+      }
+    } else {
+      showToast(data.error || "Không thể giải tán nhóm!");
+    }
+  } catch (err) {
+    showToast("Lỗi khi giải tán nhóm!");
+  }
+}
+
+// 3. My Cloud Drive View Metrics & Category Chips (2.4)
+async function loadCloudStorageMetrics() {
+  try {
+    const res = await fetch('/api/cloud/');
+    const data = await res.json();
+    if (res.ok) {
+      const metricText = document.getElementById('cloudStorageMetric');
+      const progressFill = document.getElementById('cloudProgressFill');
+      if (metricText) {
+        metricText.innerText = `Đã dùng ${data.storage_used_mb || 0} MB / ${data.storage_limit_mb || 1024} MB (${data.storage_percent || 0}%)`;
+      }
+      if (progressFill) {
+        progressFill.style.width = `${Math.min(100, data.storage_percent || 0)}%`;
+      }
+    }
+  } catch (e) {
+    console.warn("Could not load cloud storage metrics:", e);
+  }
+}
+
+function initCloudCategoryChips() {
+  const chips = document.querySelectorAll('.cloud-cat-chip');
+  chips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      chips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      state.cloudFilterCat = chip.getAttribute('data-cat') || 'all';
+      renderTimeline();
+    });
+  });
+}
+
+// 4. Network & Socket Inspector (2.5 - LTM Monitoring)
+function openNetworkInspectorModal() {
+  updateNetworkInspectorUI();
+  openModal('networkInspectorModal');
+}
+
+function updateNetworkInspectorUI() {
+  const latencyElem = document.getElementById('netInspectorLatency');
+  const statusElem = document.getElementById('netInspectorStatus');
+  const packetsElem = document.getElementById('netInspectorPackets');
+  const bytesElem = document.getElementById('netInspectorBytes');
+  const iceElem = document.getElementById('netInspectorIceState');
+  const tbody = document.getElementById('packetLogTableBody');
+
+  if (latencyElem) {
+    latencyElem.innerText = state.currentRtt !== null ? `${state.currentRtt} ms` : '-- ms';
+    if (state.currentRtt !== null && state.currentRtt > 150) {
+      latencyElem.className = 'net-card-val text-red';
+    } else {
+      latencyElem.className = 'net-card-val text-green';
+    }
+  }
+
+  if (statusElem) {
+    if (state.chatSocket) {
+      const states = ['CONNECTING (0)', 'OPEN (1)', 'CLOSING (2)', 'CLOSED (3)'];
+      statusElem.innerText = `WebSocket ${states[state.chatSocket.readyState] || 'UNKNOWN'}`;
+    } else {
+      statusElem.innerText = 'WebSocket Disconnected';
+    }
+  }
+
+  if (packetsElem) {
+    packetsElem.innerText = `${networkStats.packetsSent} / ${networkStats.packetsReceived}`;
+  }
+
+  if (bytesElem) {
+    bytesElem.innerText = `${formatBytes(networkStats.bytesSent)} / ${formatBytes(networkStats.bytesReceived)}`;
+  }
+
+  if (iceElem) {
+    const pcState = state.peerConnection ? state.peerConnection.iceConnectionState : 'idle';
+    iceElem.innerText = pcState.charAt(0).toUpperCase() + pcState.slice(1);
+    if (pcState === 'connected' || pcState === 'completed') {
+      iceElem.className = 'net-card-val text-green';
+    } else {
+      iceElem.className = 'net-card-val text-blue';
+    }
+  }
+
+  if (tbody) {
+    if (networkStats.logs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:18px;">Chưa có gói tin nào được ghi nhận. Bấm "Ping Test RTT" để phát gói tin.</td></tr>';
+    } else {
+      tbody.innerHTML = networkStats.logs.slice(0, 50).map(pkt => `
+        <tr>
+          <td>${pkt.time}</td>
+          <td><span class="${pkt.dir === 'TX' ? 'pkt-dir-tx' : 'pkt-dir-rx'}">${pkt.dir} ${pkt.dir === 'TX' ? '↑' : '↓'}</span></td>
+          <td><span class="pkt-event">${escapeHtml(pkt.event)}</span></td>
+          <td>${formatBytes(pkt.size)}</td>
+          <td><div class="pkt-payload-preview" title="${escapeHtml(pkt.payload)}">${escapeHtml(pkt.payload)}</div></td>
+        </tr>
+      `).join('');
+    }
+  }
+}
+
+function sendManualPing() {
+  if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+    showToast("WebSocket chưa kết nối! Hãy chọn một hội thoại.");
+    return;
+  }
+  state.chatSocket.send(JSON.stringify({
+    type: 'ping',
+    client_timestamp: Date.now()
+  }));
+  showToast("📡 Đã phát gói tin Ping tới WebSocket server!");
+}
+
+function clearNetworkLogs() {
+  networkStats.logs = [];
+  updateNetworkInspectorUI();
+  showToast("Đã xóa nhật ký gói tin.");
 }
 
 // ==============================================================================
@@ -4157,6 +4688,19 @@ document.addEventListener('DOMContentLoaded', () => {
   initContextMenu();
   initClipboardPaste();
   document.getElementById('btnConfirmForward')?.addEventListener('click', confirmForwardMessage);
+
+  // Phase 5: WebRTC Screen Sharing, Group Management, Cloud Filters, and Network Inspector
+  document.getElementById('btnToggleScreenShare')?.addEventListener('click', toggleScreenShare);
+  document.getElementById('btnChangeGroupAvatar')?.addEventListener('click', () => document.getElementById('groupAvatarFileInput')?.click());
+  document.getElementById('groupAvatarFileInput')?.addEventListener('change', handleGroupAvatarSelected);
+  document.getElementById('btnEditGroupName')?.addEventListener('click', editGroupName);
+  document.getElementById('btnLeaveGroup')?.addEventListener('click', leaveCurrentGroup);
+  document.getElementById('btnDisbandGroup')?.addEventListener('click', disbandCurrentGroup);
+  initCloudCategoryChips();
+  document.getElementById('btnOpenNetworkInspector')?.addEventListener('click', openNetworkInspectorModal);
+  document.getElementById('networkLatencyBadge')?.addEventListener('click', openNetworkInspectorModal);
+  document.getElementById('btnSendManualPing')?.addEventListener('click', sendManualPing);
+  document.getElementById('btnClearNetLogs')?.addEventListener('click', clearNetworkLogs);
 });
 
 

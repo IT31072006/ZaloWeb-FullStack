@@ -35,6 +35,13 @@ urlpatterns = [
     path('api/users/search/', views.api_search_users, name='api_search_users'),
     path('api/users/search_by_phone/', views.api_search_by_phone, name='api_search_by_phone'),
 
+    # Group Management APIs
+    path('api/conversations/<int:conversation_id>/update_group/', views.api_update_group, name='api_update_group'),
+    path('api/conversations/<int:conversation_id>/remove_member/', views.api_remove_group_member, name='api_remove_group_member'),
+    path('api/conversations/<int:conversation_id>/leave/', views.api_leave_group, name='api_leave_group'),
+    path('api/conversations/<int:conversation_id>/change_role/', views.api_change_member_role, name='api_change_member_role'),
+    path('api/conversations/<int:conversation_id>/disband/', views.api_disband_group, name='api_disband_group'),
+
     # Extended Features
     path('api/cloud/', views.api_cloud, name='api_cloud'),
     path('api/contacts/', views.api_contacts, name='api_contacts'),
