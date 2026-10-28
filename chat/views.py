@@ -237,7 +237,8 @@ def api_conversation_detail(request, conversation_id):
             'display_name': profile.get_display_name() if profile else m.user.username,
             'avatar_url': profile.get_avatar_url() if profile else None,
             'role': m.role,
-            'is_online': profile.is_online if profile else False
+            'is_online': profile.is_online if profile else False,
+            'last_read_message_id': m.last_read_message_id
         })
 
     # Lấy media chia sẻ (hình ảnh & audio)
@@ -1042,6 +1043,111 @@ def api_log_call(request, conversation_id):
         pass
 
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_mark_read(request, conversation_id):
+    """Đánh dấu đã đọc tin nhắn trong cuộc trò chuyện."""
+    user = request.user
+    conversation = get_object_or_404(Conversation, id=conversation_id, memberships__user=user)
+    last_msg_id = request.data.get('last_message_id')
+    
+    membership = conversation.memberships.filter(user=user).first()
+    if membership:
+        if last_msg_id:
+            try:
+                membership.last_read_message_id = max(membership.last_read_message_id, int(last_msg_id))
+            except (ValueError, TypeError):
+                pass
+        else:
+            latest = conversation.messages.last()
+            if latest:
+                membership.last_read_message_id = latest.id
+        membership.save(update_fields=['last_read_message_id'])
+
+        # Broadcast qua WebSocket để người gửi thấy trạng thái "Đã xem" tức thì
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                profile = getattr(user, 'profile', None)
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_{conversation.id}",
+                    {
+                        'type': 'broadcast_read_receipt',
+                        'user_id': user.id,
+                        'username': user.username,
+                        'display_name': profile.get_display_name() if profile else user.username,
+                        'avatar_url': profile.get_avatar_url() if profile else None,
+                        'last_read_message_id': membership.last_read_message_id,
+                        'sender_channel_name': ''
+                    }
+                )
+        except Exception:
+            pass
+
+    return Response({
+        'success': True,
+        'last_read_message_id': membership.last_read_message_id if membership else 0
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_forward_message(request, message_id):
+    """Chuyển tiếp một tin nhắn sang các cuộc hội thoại khác."""
+    user = request.user
+    original_msg = get_object_or_404(Message, id=message_id)
+    conversation_ids = request.data.get('conversation_ids', [])
+
+    if not conversation_ids or not isinstance(conversation_ids, list):
+        return Response({'error': 'Vui lòng chọn ít nhất một cuộc hội thoại để chuyển tiếp!'}, status=status.HTTP_400_BAD_REQUEST)
+
+    forwarded_count = 0
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    channel_layer = get_channel_layer()
+
+    for conv_id in conversation_ids:
+        conv = Conversation.objects.filter(id=conv_id, memberships__user=user).first()
+        if not conv:
+            continue
+
+        new_msg = Message.objects.create(
+            conversation=conv,
+            sender=user,
+            message_type=original_msg.message_type,
+            content=original_msg.content,
+            attachment=original_msg.attachment,
+            attachment_name=original_msg.attachment_name,
+            attachment_size=original_msg.attachment_size,
+            code_language=original_msg.code_language
+        )
+        conv.updated_at = timezone.now()
+        conv.save(update_fields=['updated_at'])
+        forwarded_count += 1
+
+        # Broadcast realtime
+        if channel_layer:
+            try:
+                serializer = MessageSerializer(new_msg, context={'request': request})
+                async_to_sync(channel_layer.group_send)(
+                    f"chat_{conv.id}",
+                    {
+                        'type': 'broadcast_message',
+                        'message': serializer.data
+                    }
+                )
+            except Exception:
+                pass
+
+    return Response({
+        'message': f'Đã chuyển tiếp tin nhắn tới {forwarded_count} cuộc trò chuyện!',
+        'forwarded_count': forwarded_count
+    })
+
 
 
 

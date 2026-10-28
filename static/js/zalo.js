@@ -53,7 +53,15 @@ const state = {
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
     ]
-  }
+  },
+
+  // Phase 4: UI/UX & Network Indicator Additions
+  pingInterval: null,
+  currentRtt: null,
+  activeContextMsgId: null,
+  forwardingMsg: null,
+  selectedForwardConvIds: new Set(),
+  pastedImageFile: null
 };
 
 // Emoji Data Library
@@ -825,7 +833,35 @@ async function addMemberToCurrentGroup(userId, displayName) {
 // 3. MESSAGES HISTORY & RENDERING
 // ==============================================================================
 
+function renderSkeletonTimeline() {
+  const timeline = document.getElementById('chatTimeline');
+  if (!timeline) return;
+  timeline.innerHTML = `
+    <div class="skeleton-timeline">
+      <div class="skeleton-msg-row other">
+        <div class="skeleton-shimmer skeleton-avatar"></div>
+        <div class="skeleton-shimmer skeleton-bubble w-med"></div>
+      </div>
+      <div class="skeleton-msg-row me">
+        <div class="skeleton-shimmer skeleton-bubble w-short"></div>
+      </div>
+      <div class="skeleton-msg-row other">
+        <div class="skeleton-shimmer skeleton-avatar"></div>
+        <div class="skeleton-shimmer skeleton-bubble w-long"></div>
+      </div>
+      <div class="skeleton-msg-row me">
+        <div class="skeleton-shimmer skeleton-bubble w-med"></div>
+      </div>
+      <div class="skeleton-msg-row other">
+        <div class="skeleton-shimmer skeleton-avatar"></div>
+        <div class="skeleton-shimmer skeleton-bubble w-short"></div>
+      </div>
+    </div>
+  `;
+}
+
 async function loadMessages(convId) {
+  renderSkeletonTimeline();
   try {
     const res = await fetch(`/api/conversations/${convId}/messages/`);
     const data = await res.json();
@@ -837,6 +873,9 @@ async function loadMessages(convId) {
     }
     renderTimeline();
     scrollChatToBottom();
+    if (state.lastMessageId) {
+      sendMarkRead(state.lastMessageId);
+    }
   } catch (err) {
     console.error("Lỗi tải tin nhắn:", err);
   }
@@ -1075,6 +1114,7 @@ function renderTimeline() {
             <svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
           </button>
           <div class="msg-more-menu" id="msgMoreMenu_${msg.id}">
+            <div class="msg-more-item" onclick="openForwardModal(${msg.id})"><span>↗️ Chuyển tiếp</span></div>
             ${isMe && !isRecalled ? `<div class="msg-more-item text-danger" onclick="recallMessage(${msg.id})"><span>🚫 Thu hồi</span></div>` : ''}
             <div class="msg-more-item" onclick="deleteMessageForMe(${msg.id})"><span>🗑️ Xóa ở phía tôi</span></div>
             <div class="msg-more-item" onclick="copyMessageContent(${msg.id})"><span>📋 Sao chép tin nhắn</span></div>
@@ -1082,6 +1122,52 @@ function renderTimeline() {
         </div>
       </div>
     `;
+
+    // Compute delivery & read receipt status
+    let statusHtml = '';
+    if (isMe && !isRecalled) {
+      const members = state.currentConversation?.members || [];
+      const otherMembers = members.filter(m => m.id !== (state.currentUser ? state.currentUser.id : null));
+
+      if (state.currentConversation?.is_group) {
+        const readers = otherMembers.filter(m => (m.last_read_message_id || 0) >= msg.id);
+        if (readers.length > 0) {
+          const names = readers.map(r => r.display_name).join(', ');
+          const avatarImgs = readers.slice(0, 3).map(r => `<img src="${r.avatar_url}" title="${escapeHtml(r.display_name)} đã xem" />`).join('');
+          const moreCount = readers.length > 3 ? `<span style="font-size:10px; margin-left:2px; font-weight:700;">+${readers.length - 3}</span>` : '';
+          statusHtml = `
+            <div class="msg-status-indicator seen" title="${escapeHtml(names)} đã xem">
+              <span class="msg-status-text">Đã xem</span>
+              <div class="seen-avatars-cluster">${avatarImgs}${moreCount}</div>
+            </div>
+          `;
+        } else {
+          statusHtml = `
+            <div class="msg-status-indicator delivered" title="Đã nhận">
+              <span class="msg-status-text">Đã nhận</span>
+              <span>✓✓</span>
+            </div>
+          `;
+        }
+      } else {
+        const other = otherMembers[0];
+        if (other && (other.last_read_message_id || 0) >= msg.id) {
+          statusHtml = `
+            <div class="msg-status-indicator seen" title="${escapeHtml(other.display_name)} đã xem">
+              <span class="msg-status-text">Đã xem</span>
+              <img class="seen-mini-avatar" src="${other.avatar_url}" alt="${escapeHtml(other.display_name)}">
+            </div>
+          `;
+        } else {
+          statusHtml = `
+            <div class="msg-status-indicator delivered" title="Đã nhận">
+              <span class="msg-status-text">Đã nhận</span>
+              <span>✓✓</span>
+            </div>
+          `;
+        }
+      }
+    }
 
     row.innerHTML = `
       ${actionsToolbarHtml}
@@ -1093,7 +1179,7 @@ function renderTimeline() {
           ${bodyHtml}
           <div class="msg-meta-row">
             <span>${msg.formatted_time || ''}</span>
-            ${isMe ? '<span>✓✓</span>' : ''}
+            ${statusHtml}
           </div>
         </div>
         ${reactionsHtml}
@@ -1151,8 +1237,109 @@ function scrollToMessage(msgId) {
   }
 }
 
+// Floating reaction burst animation
+function triggerFloatingReaction(msgId, emoji) {
+  if (!emoji) return;
+  const row = document.querySelector(`.message-row[data-msg-id="${msgId}"]`);
+  if (!row) return;
+
+  const bubble = row.querySelector('.msg-bubble');
+  if (!bubble) return;
+
+  const floating = document.createElement('div');
+  floating.className = 'floating-reaction-bubble';
+  floating.innerText = emoji;
+
+  const rect = bubble.getBoundingClientRect();
+  floating.style.position = 'fixed';
+  floating.style.left = `${rect.left + rect.width / 2 - 13}px`;
+  floating.style.top = `${rect.top - 12}px`;
+
+  document.body.appendChild(floating);
+  setTimeout(() => floating.remove(), 900);
+}
+
+// Mark as read (Read receipts)
+function sendMarkRead(messageId) {
+  if (!messageId || !state.currentConversationId) return;
+
+  // Send via WebSocket (0ms)
+  if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    state.chatSocket.send(JSON.stringify({
+      type: 'mark_read',
+      last_message_id: messageId
+    }));
+  }
+
+  // Also call API
+  fetch(`/api/conversations/${state.currentConversationId}/mark_read/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': getCookie('csrftoken')
+    },
+    body: JSON.stringify({ last_message_id: messageId })
+  }).catch(() => {});
+}
+
+// Update read statuses in timeline dynamically
+function updateTimelineReadStatuses() {
+  const members = state.currentConversation?.members || [];
+  const otherMembers = members.filter(m => m.id !== (state.currentUser ? state.currentUser.id : null));
+
+  document.querySelectorAll('.message-row.me').forEach(row => {
+    const msgId = parseInt(row.dataset.msgId);
+    if (!msgId) return;
+
+    const metaRow = row.querySelector('.msg-meta-row');
+    if (!metaRow) return;
+
+    let isRead = false;
+    let readers = [];
+    if (state.currentConversation?.is_group) {
+      readers = otherMembers.filter(m => (m.last_read_message_id || 0) >= msgId);
+      isRead = readers.length > 0;
+    } else {
+      const other = otherMembers[0];
+      isRead = other && (other.last_read_message_id || 0) >= msgId;
+      if (other && isRead) readers = [other];
+    }
+
+    if (isRead) {
+      const names = readers.map(r => r.display_name).join(', ');
+      let newHtml = '';
+      if (state.currentConversation?.is_group) {
+        const avatarImgs = readers.slice(0, 3).map(r => `<img src="${r.avatar_url}" title="${escapeHtml(r.display_name)} đã xem" />`).join('');
+        const moreCount = readers.length > 3 ? `<span style="font-size:10px; margin-left:2px; font-weight:700;">+${readers.length - 3}</span>` : '';
+        newHtml = `
+          <div class="msg-status-indicator seen" title="${escapeHtml(names)} đã xem">
+            <span class="msg-status-text">Đã xem</span>
+            <div class="seen-avatars-cluster">${avatarImgs}${moreCount}</div>
+          </div>
+        `;
+      } else {
+        const other = readers[0];
+        newHtml = `
+          <div class="msg-status-indicator seen" title="${escapeHtml(other.display_name)} đã xem">
+            <span class="msg-status-text">Đã xem</span>
+            <img class="seen-mini-avatar" src="${other.avatar_url}" alt="${escapeHtml(other.display_name)}">
+          </div>
+        `;
+      }
+
+      const existing = metaRow.querySelector('.msg-status-indicator');
+      if (existing) {
+        existing.outerHTML = newHtml;
+      } else {
+        metaRow.insertAdjacentHTML('beforeend', newHtml);
+      }
+    }
+  });
+}
+
 async function toggleReaction(msgId, emoji) {
   if (!state.currentConversationId) return;
+  triggerFloatingReaction(msgId, emoji);
   try {
     const res = await fetch(`/api/messages/${msgId}/react/`, {
       method: 'POST',
@@ -2270,6 +2457,419 @@ function switchMainTab(tab) {
 }
 
 // ==============================================================================
+// 10.1 WEBSOCKET PING / PONG & NETWORK LATENCY INDICATOR (LTM Core)
+// ==============================================================================
+
+function updateLatencyBadge(rtt) {
+  const badge = document.getElementById('networkLatencyBadge');
+  const text = document.getElementById('latencyText');
+  if (!badge || !text) return;
+
+  if (rtt === null || rtt === undefined) {
+    badge.className = 'network-latency-badge';
+    badge.title = 'Chưa kết nối WebSocket';
+    text.innerText = '-- ms';
+    return;
+  }
+
+  badge.className = 'network-latency-badge';
+  if (rtt < 60) {
+    badge.classList.add('latency-fast');
+    badge.title = `WebSocket (RFC 6455) - Độ trễ RTT: ${rtt}ms (Rất tốt)`;
+  } else if (rtt < 150) {
+    badge.classList.add('latency-medium');
+    badge.title = `WebSocket (RFC 6455) - Độ trễ RTT: ${rtt}ms (Bình thường)`;
+  } else {
+    badge.classList.add('latency-slow');
+    badge.title = `WebSocket (RFC 6455) - Độ trễ RTT: ${rtt}ms (Đường truyền chậm)`;
+  }
+  text.innerText = `${rtt}ms`;
+}
+
+function startWebSocketPing() {
+  stopWebSocketPing();
+  if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    state.chatSocket.send(JSON.stringify({
+      type: 'ping',
+      client_timestamp: Date.now()
+    }));
+  }
+  state.pingInterval = setInterval(() => {
+    if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+      state.chatSocket.send(JSON.stringify({
+        type: 'ping',
+        client_timestamp: Date.now()
+      }));
+    }
+  }, 4500);
+}
+
+function stopWebSocketPing() {
+  if (state.pingInterval) {
+    clearInterval(state.pingInterval);
+    state.pingInterval = null;
+  }
+}
+
+function handleIncomingReadReceipt(data) {
+  if (!state.currentConversation) return;
+
+  const member = (state.currentConversation.members || []).find(m => m.id === data.user_id);
+  if (member) {
+    member.last_read_message_id = Math.max(member.last_read_message_id || 0, data.last_read_message_id);
+  } else if (state.currentConversation.members) {
+    state.currentConversation.members.push({
+      id: data.user_id,
+      username: data.username,
+      display_name: data.display_name,
+      avatar_url: data.avatar_url,
+      last_read_message_id: data.last_read_message_id
+    });
+  }
+
+  updateTimelineReadStatuses();
+}
+
+// ==============================================================================
+// 10.2 CONTEXT MENU, CLIPBOARD PASTE IMAGE & FORWARD MODAL
+// ==============================================================================
+
+function initContextMenu() {
+  const timeline = document.getElementById('chatTimeline');
+  const menu = document.getElementById('zaloContextMenu');
+  if (!timeline || !menu) return;
+
+  timeline.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.message-row');
+    if (!row) return;
+
+    e.preventDefault();
+    const msgId = parseInt(row.dataset.msgId);
+    if (!msgId) return;
+
+    state.activeContextMsgId = msgId;
+    const msg = state.messages.find(m => m.id === msgId);
+    if (!msg) return;
+
+    const isMe = msg.is_me;
+    const isRecalled = msg.is_recalled;
+
+    const ctxRecall = document.getElementById('ctxRecall');
+    if (ctxRecall) {
+      ctxRecall.style.display = (isMe && !isRecalled) ? 'flex' : 'none';
+    }
+
+    const ctxPinText = document.getElementById('ctxPinText');
+    if (ctxPinText) {
+      const isPinned = state.currentConversation?.pinned_message?.id === msgId;
+      ctxPinText.innerText = isPinned ? 'Bỏ ghim tin nhắn' : 'Ghim tin nhắn';
+    }
+
+    menu.style.display = 'block';
+    const menuWidth = 210;
+    const menuHeight = menu.offsetHeight || 220;
+
+    let posX = e.clientX;
+    let posY = e.clientY;
+
+    if (posX + menuWidth > window.innerWidth - 10) {
+      posX = window.innerWidth - menuWidth - 12;
+    }
+    if (posY + menuHeight > window.innerHeight - 10) {
+      posY = window.innerHeight - menuHeight - 12;
+    }
+
+    menu.style.left = `${posX}px`;
+    menu.style.top = `${posY}px`;
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#zaloContextMenu')) {
+      closeContextMenu();
+    }
+  });
+
+  timeline.addEventListener('scroll', () => {
+    closeContextMenu();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeContextMenu();
+    }
+  });
+
+  document.getElementById('ctxReply')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) startReplyMessage(id);
+  });
+
+  document.getElementById('ctxForward')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) openForwardModal(id);
+  });
+
+  document.getElementById('ctxCopy')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) copyMessageContent(id);
+  });
+
+  document.getElementById('ctxPin')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) pinConversationMessage(id);
+  });
+
+  document.getElementById('ctxDelete')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) deleteMessageForMe(id);
+  });
+
+  document.getElementById('ctxRecall')?.addEventListener('click', () => {
+    const id = state.activeContextMsgId;
+    closeContextMenu();
+    if (id) recallMessage(id);
+  });
+}
+
+function closeContextMenu() {
+  const menu = document.getElementById('zaloContextMenu');
+  if (menu) menu.style.display = 'none';
+  state.activeContextMsgId = null;
+}
+
+function openForwardModal(msgId) {
+  const msg = state.messages.find(m => m.id === msgId);
+  if (!msg) return;
+
+  state.forwardingMsg = msg;
+  state.selectedForwardConvIds.clear();
+
+  const snippetBox = document.getElementById('forwardPreviewSnippet');
+  if (snippetBox) {
+    let snippet = msg.content;
+    if (msg.message_type === 'image') snippet = '🖼️ [Hình ảnh]';
+    else if (msg.message_type === 'audio') snippet = '🎙️ [Tin nhắn thoại]';
+    else if (msg.message_type === 'file') snippet = `📄 [Tệp tin] ${msg.attachment_name || ''}`;
+    else if (msg.message_type === 'code') snippet = `💻 [Đoạn mã ${msg.code_language || 'Code'}]`;
+    snippetBox.innerHTML = `<strong>${escapeHtml(msg.sender_name)}:</strong> ${escapeHtml(snippet)}`;
+  }
+
+  renderForwardTargets('');
+
+  const searchInput = document.getElementById('forwardSearchInput');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.oninput = (e) => renderForwardTargets(e.target.value);
+  }
+
+  const btnConfirm = document.getElementById('btnConfirmForward');
+  if (btnConfirm) {
+    btnConfirm.disabled = true;
+    btnConfirm.innerText = 'Chuyển tiếp';
+  }
+
+  openModal('forwardMsgModal');
+}
+
+function renderForwardTargets(searchQuery = '') {
+  const container = document.getElementById('forwardTargetsList');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const q = searchQuery.toLowerCase().trim();
+  const list = (state.conversations || []).filter(c => {
+    if (!q) return true;
+    return c.title.toLowerCase().includes(q);
+  });
+
+  if (list.length === 0) {
+    container.innerHTML = '<div style="padding:16px; text-align:center; color:var(--zalo-text-muted); font-size:13px;">Không tìm thấy cuộc trò chuyện nào</div>';
+    return;
+  }
+
+  list.forEach(conv => {
+    const isSelected = state.selectedForwardConvIds.has(conv.id);
+    const item = document.createElement('div');
+    item.className = `forward-target-item ${isSelected ? 'selected' : ''}`;
+    item.innerHTML = `
+      <div class="forward-target-left">
+        <img class="forward-target-avatar" src="${conv.avatar_url}" alt="Avatar">
+        <div>
+          <div class="forward-target-name">${escapeHtml(conv.title)}</div>
+          <div class="forward-target-sub">${conv.is_group ? `${conv.member_count} thành viên` : 'Trò chuyện 1-1'}</div>
+        </div>
+      </div>
+      <input type="checkbox" class="forward-target-checkbox" ${isSelected ? 'checked' : ''}>
+    `;
+
+    item.onclick = () => {
+      if (state.selectedForwardConvIds.has(conv.id)) {
+        state.selectedForwardConvIds.delete(conv.id);
+        item.classList.remove('selected');
+        item.querySelector('.forward-target-checkbox').checked = false;
+      } else {
+        state.selectedForwardConvIds.add(conv.id);
+        item.classList.add('selected');
+        item.querySelector('.forward-target-checkbox').checked = true;
+      }
+      const btnConfirm = document.getElementById('btnConfirmForward');
+      if (btnConfirm) {
+        btnConfirm.disabled = state.selectedForwardConvIds.size === 0;
+        btnConfirm.innerText = state.selectedForwardConvIds.size > 0 
+          ? `Chuyển tiếp (${state.selectedForwardConvIds.size})`
+          : 'Chuyển tiếp';
+      }
+    };
+    container.appendChild(item);
+  });
+}
+
+async function confirmForwardMessage() {
+  if (!state.forwardingMsg || state.selectedForwardConvIds.size === 0) return;
+  const btn = document.getElementById('btnConfirmForward');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = 'Đang gửi...';
+  }
+
+  try {
+    const res = await fetch(`/api/messages/${state.forwardingMsg.id}/forward/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({
+        conversation_ids: Array.from(state.selectedForwardConvIds)
+      })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeModal('forwardMsgModal');
+      showToast(data.message || 'Đã chuyển tiếp tin nhắn thành công!');
+      loadConversations();
+      if (state.selectedForwardConvIds.has(state.currentConversationId)) {
+        loadMessages(state.currentConversationId);
+      }
+    } else {
+      showToast(data.error || 'Chuyển tiếp tin nhắn thất bại!');
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối khi chuyển tiếp tin nhắn!');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = 'Chuyển tiếp';
+    }
+  }
+}
+
+function initClipboardPaste() {
+  document.addEventListener('paste', handleClipboardPaste);
+
+  document.getElementById('btnSendPasteImage')?.addEventListener('click', sendPastedImage);
+  document.getElementById('pasteImageCaptionInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendPastedImage();
+    }
+  });
+}
+
+function handleClipboardPaste(e) {
+  const items = (e.clipboardData || window.clipboardData)?.items;
+  if (!items) return;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type && item.type.indexOf('image') !== -1) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      state.pastedImageFile = file;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const previewImg = document.getElementById('pastePreviewImg');
+        if (previewImg) previewImg.src = event.target.result;
+
+        const sizeKb = Math.round(file.size / 1024);
+        const metaText = document.getElementById('pasteImageMeta');
+        if (metaText) {
+          metaText.innerText = `Đã chụp từ bộ nhớ tạm • ${sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' MB' : sizeKb + ' KB'}`;
+        }
+
+        const captionInput = document.getElementById('pasteImageCaptionInput');
+        if (captionInput) {
+          captionInput.value = '';
+          setTimeout(() => captionInput.focus(), 150);
+        }
+
+        openModal('pasteImagePreviewModal');
+      };
+      reader.readAsDataURL(file);
+      break;
+    }
+  }
+}
+
+async function sendPastedImage() {
+  if (!state.pastedImageFile || !state.currentConversationId) {
+    showToast('Vui lòng chọn cuộc trò chuyện trước khi gửi ảnh!');
+    return;
+  }
+
+  const captionInput = document.getElementById('pasteImageCaptionInput');
+  const caption = captionInput ? captionInput.value.trim() : '';
+
+  const btn = document.getElementById('btnSendPasteImage');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = 'Đang gửi ảnh...';
+  }
+
+  const formData = new FormData();
+  formData.append('message_type', 'image');
+  formData.append('attachment', state.pastedImageFile);
+  formData.append('content', caption || 'Hình ảnh');
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') },
+      body: formData
+    });
+    const newMsg = await res.json();
+    if (res.ok) {
+      closeModal('pasteImagePreviewModal');
+      state.pastedImageFile = null;
+      state.messages.push(newMsg);
+      state.lastMessageId = newMsg.id;
+      renderTimeline();
+      scrollChatToBottom();
+      playNotificationSound();
+      loadConversations();
+      showToast('Đã gửi hình ảnh thành công!');
+    } else {
+      showToast(newMsg.error || 'Gửi ảnh thất bại!');
+    }
+  } catch (err) {
+    showToast('Lỗi kết nối khi gửi ảnh!');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = 'Gửi ảnh';
+    }
+  }
+}
+
+// ==============================================================================
 // 11. WEBSOCKET REAL-TIME CHAT & WEBRTC P2P VOICE/VIDEO CALLS (Phase 3: LTM Core)
 // ==============================================================================
 
@@ -2280,6 +2880,7 @@ function connectWebSocket(convId) {
     } catch (e) {}
     state.chatSocket = null;
   }
+  stopWebSocketPing();
 
   const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${wsProto}//${window.location.host}/ws/chat/${convId}/`;
@@ -2291,6 +2892,10 @@ function connectWebSocket(convId) {
     socket.onopen = () => {
       state.isWsConnected = true;
       console.log(`[WebSocket] Đã kết nối kênh chat ws:// cho hội thoại #${convId}`);
+      startWebSocketPing();
+      if (state.lastMessageId) {
+        sendMarkRead(state.lastMessageId);
+      }
       const subtitle = document.getElementById('currentChatSubtitle');
       if (subtitle) {
         const dot = subtitle.querySelector('.online-indicator');
@@ -2309,16 +2914,22 @@ function connectWebSocket(convId) {
 
     socket.onclose = (e) => {
       state.isWsConnected = false;
+      stopWebSocketPing();
+      updateLatencyBadge(null);
       console.log("[WebSocket] Đã đóng kết nối (code:", e.code, ")");
     };
 
     socket.onerror = (err) => {
       console.warn("[WebSocket] Gặp sự cố kết nối, tự động dự phòng qua HTTP Sync:", err);
       state.isWsConnected = false;
+      stopWebSocketPing();
+      updateLatencyBadge(null);
     };
   } catch (err) {
     console.warn("[WebSocket] Không thể khởi tạo kết nối socket:", err);
     state.isWsConnected = false;
+    stopWebSocketPing();
+    updateLatencyBadge(null);
   }
 }
 
@@ -2334,7 +2945,17 @@ function handleWebSocketMessage(data) {
       scrollChatToBottom();
       playNotificationSound();
       loadConversations();
+      if (!newMsg.is_me) {
+        sendMarkRead(newMsg.id);
+      }
     }
+  } else if (type === 'pong') {
+    const now = Date.now();
+    const rtt = Math.max(1, now - (data.client_timestamp || now));
+    state.currentRtt = rtt;
+    updateLatencyBadge(rtt);
+  } else if (type === 'read_receipt') {
+    handleIncomingReadReceipt(data);
   } else if (type === 'typing') {
     const bar = document.getElementById('typingIndicatorBar');
     const text = document.getElementById('typingIndicatorText');
@@ -2352,6 +2973,10 @@ function handleWebSocketMessage(data) {
     if (msg) {
       msg.reactions = data.reactions;
       renderTimeline();
+      if (data.reactions && data.reactions.length > 0) {
+        const lastReact = data.reactions[data.reactions.length - 1];
+        triggerFloatingReaction(data.message_id, lastReact.emoji);
+      }
     }
   } else if (type === 'message_recalled') {
     const msg = state.messages.find(m => m.id === data.message_id);
@@ -3527,4 +4152,11 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.msg-more-menu.show').forEach(m => m.classList.remove('show'));
     }
   });
+
+  // Phase 4: Custom Context Menu, Clipboard Paste Image, Forward Modal
+  initContextMenu();
+  initClipboardPaste();
+  document.getElementById('btnConfirmForward')?.addEventListener('click', confirmForwardMessage);
 });
+
+

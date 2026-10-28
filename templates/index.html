@@ -148,6 +148,12 @@
         </div>
 
         <div class="chat-header-right">
+          <!-- WebSocket RTT Latency Indicator (LTM Network Performance) -->
+          <div class="network-latency-badge" id="networkLatencyBadge" title="Độ trễ truyền tin WebSocket (Round-Trip Time - RFC 6455)">
+            <span class="latency-dot"></span>
+            <span class="latency-text" id="latencyText">-- ms</span>
+          </div>
+
           <button class="header-icon-btn" id="btnCallVoice" title="Cuộc gọi thoại">
             <svg viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
           </button>
@@ -888,6 +894,95 @@
           <svg viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>
           <span>Trả lời</span>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       12. CUSTOM CONTEXT MENU (CHUẨN ZALO WEB & PC)
+       ==================================================================== -->
+  <div class="zalo-context-menu" id="zaloContextMenu" style="display: none;">
+    <div class="context-menu-item" id="ctxReply">
+      <svg viewBox="0 0 24 24"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+      <span>Trả lời</span>
+    </div>
+    <div class="context-menu-item" id="ctxForward">
+      <svg viewBox="0 0 24 24"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/></svg>
+      <span>Chuyển tiếp</span>
+    </div>
+    <div class="context-menu-item" id="ctxCopy">
+      <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+      <span>Sao chép tin nhắn</span>
+    </div>
+    <div class="context-menu-item" id="ctxPin">
+      <svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+      <span id="ctxPinText">Ghim tin nhắn</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <div class="context-menu-item" id="ctxDelete">
+      <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+      <span>Xóa ở phía tôi</span>
+    </div>
+    <div class="context-menu-item text-danger" id="ctxRecall">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/></svg>
+      <span>Thu hồi tin nhắn</span>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       13. CLIPBOARD PASTE IMAGE PREVIEW MODAL (XEM TRƯỚC ẢNH DÁN TỪ CLIPBOARD)
+       ==================================================================== -->
+  <div class="modal-overlay" id="pasteImagePreviewModal">
+    <div class="zalo-modal-card" style="max-width: 500px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:22px;">🖼️</span>
+          <div>
+            <h3 style="margin:0; font-size:16px;">Gửi hình ảnh</h3>
+            <div style="font-size:12px; color:var(--zalo-text-muted);" id="pasteImageMeta">Đã chụp từ bộ nhớ tạm (Clipboard)</div>
+          </div>
+        </div>
+        <button class="modal-close-btn" onclick="closeModal('pasteImagePreviewModal')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 16px 20px;">
+        <div class="paste-preview-container">
+          <img id="pastePreviewImg" src="" alt="Ảnh xem trước">
+        </div>
+        <div class="form-group-item" style="margin-top: 14px;">
+          <input type="text" id="pasteImageCaptionInput" placeholder="Thêm chú thích ảnh... (nhấn Enter để gửi)">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal('pasteImagePreviewModal')">Hủy</button>
+        <button class="btn-primary" id="btnSendPasteImage">Gửi ảnh</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       14. FORWARD MESSAGE MODAL (CHUYỂN TIẾP TIN NHẮN CHUẨN ZALO)
+       ==================================================================== -->
+  <div class="modal-overlay" id="forwardMsgModal">
+    <div class="zalo-modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3 style="margin:0; font-size:16px;">Chuyển tiếp tin nhắn</h3>
+        <button class="modal-close-btn" onclick="closeModal('forwardMsgModal')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 16px 20px;">
+        <div class="forward-preview-bubble" id="forwardPreviewSnippet">
+          <!-- Snippet preview -->
+        </div>
+        <div class="search-box-wrapper" style="margin: 12px 0; width: 100%;">
+          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input type="text" id="forwardSearchInput" placeholder="Tìm người nhận hoặc nhóm...">
+        </div>
+        <div class="forward-targets-list" id="forwardTargetsList" style="max-height: 240px; overflow-y: auto;">
+          <!-- Dynamic conversation check targets -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal('forwardMsgModal')">Hủy</button>
+        <button class="btn-primary" id="btnConfirmForward" disabled>Chuyển tiếp</button>
       </div>
     </div>
   </div>

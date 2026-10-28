@@ -235,6 +235,37 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+        # 8. WebSocket Ping / Pong đo độ trễ RTT (Round-Trip Time)
+        elif msg_type == 'ping':
+            client_ts = data.get('client_timestamp')
+            await self.send(text_data=json.dumps({
+                'type': 'pong',
+                'client_timestamp': client_ts,
+                'server_timestamp': timezone.now().isoformat()
+            }))
+
+        # 9. Đánh dấu đã đọc tin nhắn (Read Receipt)
+        elif msg_type == 'mark_read':
+            last_msg_id = data.get('last_message_id')
+            if last_msg_id:
+                try:
+                    await self.update_last_read(self.conversation_id, self.user, int(last_msg_id))
+                    await self.channel_layer.group_send(
+                        self.room_group_name,
+                        {
+                            'type': 'broadcast_read_receipt',
+                            'user_id': self.user.id,
+                            'username': self.user.username,
+                            'display_name': self.user_display_name,
+                            'avatar_url': self.user_avatar,
+                            'last_read_message_id': int(last_msg_id),
+                            'sender_channel_name': self.channel_name
+                        }
+                    )
+                except Exception:
+                    pass
+
+
     # =========================================================================
     # CÁC BỘ PHÁT SỰ KIỆN BROADCAST TỚI CLIENT QUA WEBSOCKET
     # =========================================================================
@@ -313,6 +344,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
             payload['is_cam_off'] = event['is_cam_off']
 
         await self.send(text_data=json.dumps(payload))
+
+    async def broadcast_read_receipt(self, event):
+        if self.channel_name == event.get('sender_channel_name'):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'read_receipt',
+            'user_id': event['user_id'],
+            'username': event['username'],
+            'display_name': event['display_name'],
+            'avatar_url': event['avatar_url'],
+            'last_read_message_id': event['last_read_message_id']
+        }))
+
 
     # =========================================================================
     # DATABASE ASYNC HELPERS (Django ORM qua database_sync_to_async)
@@ -486,3 +530,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'snippet': snippet,
             'type': msg.message_type
         }
+
+    @database_sync_to_async
+    def update_last_read(self, conv_id, user, last_message_id):
+        ConversationMember.objects.filter(conversation_id=conv_id, user=user).update(
+            last_read_message_id=last_message_id
+        )
+
