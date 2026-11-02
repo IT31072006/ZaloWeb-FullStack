@@ -27,11 +27,20 @@ urlpatterns = [
     path('api/conversations/<int:conversation_id>/toggle_mute/', views.api_toggle_mute, name='api_toggle_mute'),
     path('api/conversations/<int:conversation_id>/toggle_priority/', views.api_toggle_priority, name='api_toggle_priority'),
     path('api/conversations/<int:conversation_id>/pin_message/', views.api_pin_message, name='api_pin_message'),
+    path('api/conversations/<int:conversation_id>/mark_read/', views.api_mark_read, name='api_mark_read'),
     path('api/messages/<int:message_id>/recall/', views.api_recall_message, name='api_recall_message'),
     path('api/messages/<int:message_id>/delete/', views.api_delete_message, name='api_delete_message'),
     path('api/messages/<int:message_id>/react/', views.api_react_message, name='api_react_message'),
+    path('api/messages/<int:message_id>/forward/', views.api_forward_message, name='api_forward_message'),
     path('api/users/search/', views.api_search_users, name='api_search_users'),
     path('api/users/search_by_phone/', views.api_search_by_phone, name='api_search_by_phone'),
+
+    # Group Management APIs
+    path('api/conversations/<int:conversation_id>/update_group/', views.api_update_group, name='api_update_group'),
+    path('api/conversations/<int:conversation_id>/remove_member/', views.api_remove_group_member, name='api_remove_group_member'),
+    path('api/conversations/<int:conversation_id>/leave/', views.api_leave_group, name='api_leave_group'),
+    path('api/conversations/<int:conversation_id>/change_role/', views.api_change_member_role, name='api_change_member_role'),
+    path('api/conversations/<int:conversation_id>/disband/', views.api_disband_group, name='api_disband_group'),
 
     # Extended Features
     path('api/cloud/', views.api_cloud, name='api_cloud'),
