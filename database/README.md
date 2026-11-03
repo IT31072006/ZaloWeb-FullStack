@@ -6,7 +6,7 @@ Tài liệu thiết kế và hướng dẫn lưu trữ dữ liệu cho hệ th�
 
 ## 1. Cấu Trúc Bảng Dữ Liệu (Database Schema)
 
-Hệ thống sử dụng 7 bảng trong PostgreSQL / SQLite:
+Hệ thống sử dụng 9 bảng trong PostgreSQL / SQLite:
 
 | Tên Bảng | Ý Nghĩa / Chức Năng |
 | :--- | :--- |
@@ -18,6 +18,8 @@ Hệ thống sử dụng 7 bảng trong PostgreSQL / SQLite:
 | `chat_task` | Quản lý việc cần làm / To-do & Nhắc hẹn: Tiêu đề (`title`), Hạn chót (`due`), Độ ưu tiên (`priority`), Đã hoàn thành (`done`), Người thực hiện (`user_id`), Hội thoại liên kết (`conversation_id`). |
 | `chat_messagereaction` | Biểu cảm cảm xúc tin nhắn: Mã tin nhắn (`message_id`), Người thả cảm xúc (`user_id`), Emoji cảm xúc (`emoji`: ❤️, 👍, 😂, 😮, 😢, 😡), Thời gian tạo. |
 | `chat_message_deleted_by` | Bảng liên kết trung gian (M2M): Quản lý tính năng "Xóa tin nhắn ở phía tôi" cho từng người dùng mà không ảnh hưởng tới đối phương. |
+| `chat_friendship` | Quản lý mối quan hệ bạn bè 2 chiều giữa 2 người dùng. |
+| `chat_friendrequest` | Quản lý lời mời kết bạn: trạng thái `pending`, `accepted`, `rejected`, gửi nhận thời gian thực qua WebSocket. |
 
 ---
 

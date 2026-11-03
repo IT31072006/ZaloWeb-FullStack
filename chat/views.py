@@ -13,7 +13,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import UserProfile, Conversation, ConversationMember, Message, Task, MessageReaction
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from .models import UserProfile, Conversation, ConversationMember, Message, Task, MessageReaction, Friendship, FriendRequest
 from .serializers import UserProfileSerializer, MessageSerializer, ConversationListSerializer
 
 
@@ -31,6 +33,22 @@ def auth_view(request):
     if request.user.is_authenticated:
         return redirect('/')
     return render(request, 'auth.html')
+
+
+def call_window_view(request):
+    """Cửa sổ Pop-up WebRTC Video Call độc lập khi nhấn Gọi Video từ Desktop."""
+    conv_id = request.GET.get('conv', '1')
+    username = request.GET.get('user', 'User')
+    peer_name = request.GET.get('peer', 'Bạn bè')
+    role = request.GET.get('role', 'caller')
+    room_id = request.GET.get('room', f'call_{conv_id}')
+    return render(request, 'call_window.html', {
+        'conv_id': conv_id,
+        'user': username,
+        'peer': peer_name,
+        'role': role,
+        'room': room_id,
+    })
 
 
 # ==============================================================================
@@ -514,18 +532,18 @@ def api_search_by_phone(request):
             }
         })
 
-    # Tìm user theo số điện thoại
+    # Tìm user theo số điện thoại hoặc Username
     suffix = normalized[-9:] if len(normalized) >= 9 else normalized
-    target_user = User.objects.filter(
-        models.Q(profile__phone__iexact=normalized) |
-        models.Q(profile__phone__iexact=phone_raw) |
-        models.Q(profile__phone__endswith=suffix)
-    ).exclude(id=request.user.id).select_related('profile').first()
+    search_q = models.Q(username__iexact=phone_raw)
+    if digits_only:
+        search_q |= models.Q(profile__phone__iexact=normalized) | models.Q(profile__phone__iexact=phone_raw) | models.Q(profile__phone__endswith=suffix)
+
+    target_user = User.objects.filter(search_q).exclude(id=request.user.id).select_related('profile').first()
 
     if not target_user:
         return Response({
             'status': 'not_found',
-            'message': f'Không tìm thấy người dùng với số điện thoại "{phone_raw}".'
+            'message': f'Không tìm thấy người dùng với số điện thoại hoặc tài khoản "{phone_raw}".'
         }, status=status.HTTP_404_NOT_FOUND)
 
     p = getattr(target_user, 'profile', None)
@@ -535,6 +553,10 @@ def api_search_by_phone(request):
     ).filter(
         memberships__user=target_user
     ).first()
+
+    is_friend = Friendship.are_friends(request.user, target_user)
+    has_sent_req = FriendRequest.objects.filter(sender=request.user, receiver=target_user, status='pending').exists()
+    incoming_req = FriendRequest.objects.filter(sender=target_user, receiver=request.user, status='pending').first()
 
     return Response({
         'status': 'found',
@@ -548,7 +570,10 @@ def api_search_by_phone(request):
             'gender': p.get_gender_display() if p and hasattr(p, 'get_gender_display') else 'Nam',
             'is_online': p.is_online if p else False,
             'has_conversation': existing_conv is not None,
-            'conversation_id': existing_conv.id if existing_conv else None
+            'conversation_id': existing_conv.id if existing_conv else None,
+            'is_friend': is_friend,
+            'has_sent_request': has_sent_req,
+            'incoming_request_id': incoming_req.id if incoming_req else None
         }
     })
 
@@ -641,9 +666,12 @@ def api_cloud(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_contacts(request):
-    """Lấy danh bạ người dùng và danh sách các nhóm đã tham gia."""
+    """Lấy danh bạ người dùng (chỉ bạn bè thực sự), lời mời kết bạn và nhóm đã tham gia."""
     user = request.user
-    users = User.objects.exclude(id=user.id).select_related('profile').order_by('profile__display_name', 'username')
+
+    # 1. Chỉ lấy những người thực sự là bạn bè qua Friendship
+    friend_ids = Friendship.get_friend_ids(user)
+    users = User.objects.filter(id__in=friend_ids).select_related('profile').order_by('profile__display_name', 'username')
     contacts = []
     for u in users:
         p = getattr(u, 'profile', None)
@@ -657,6 +685,25 @@ def api_contacts(request):
             'is_online': p.is_online if p else False,
         })
 
+    # 2. Lời mời kết bạn đang chờ (Incoming Friend Requests)
+    pending_incoming = FriendRequest.objects.filter(receiver=user, status='pending').select_related('sender__profile')
+    incoming_list = []
+    for r in pending_incoming:
+        sp = getattr(r.sender, 'profile', None)
+        incoming_list.append({
+            'id': r.id,
+            'sender_id': r.sender.id,
+            'username': r.sender.username,
+            'display_name': sp.get_display_name() if sp else r.sender.username,
+            'avatar_url': sp.get_avatar_url() if sp else None,
+            'phone': sp.phone if sp else '',
+            'bio': sp.bio if sp else '',
+            'created_at': r.created_at.strftime('%H:%M %d/%m/%Y')
+        })
+
+    # 3. Danh sách ID những người mình đã gửi lời mời đang chờ
+    sent_ids = list(FriendRequest.objects.filter(sender=user, status='pending').values_list('receiver_id', flat=True))
+
     groups = Conversation.objects.filter(is_group=True, memberships__user=user).order_by('name')
     group_list = []
     for g in groups:
@@ -669,8 +716,151 @@ def api_contacts(request):
 
     return Response({
         'contacts': contacts,
-        'groups': group_list
+        'friends': contacts,
+        'groups': group_list,
+        'friend_requests': incoming_list,
+        'sent_request_user_ids': sent_ids
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_send_friend_request(request):
+    """Gửi lời mời kết bạn (Friend Request) tới người dùng khác."""
+    target_id = request.data.get('user_id') or request.data.get('target_user_id')
+    phone = request.data.get('phone', '').strip() if isinstance(request.data.get('phone'), str) else ''
+
+    target_user = None
+    if target_id:
+        try:
+            target_user = User.objects.filter(id=int(target_id)).first()
+        except (ValueError, TypeError):
+            pass
+    elif phone:
+        digits = re.sub(r'\D', '', phone)
+        suffix = digits[-9:] if len(digits) >= 9 else digits
+        target_user = User.objects.filter(
+            Q(profile__phone=phone) | Q(profile__phone__endswith=suffix) | Q(username__iexact=phone)
+        ).first()
+
+    if not target_user:
+        return Response({'status': 'error', 'message': 'Không tìm thấy người dùng!'}, status=status.HTTP_404_NOT_FOUND)
+
+    if target_user.id == request.user.id:
+        return Response({'status': 'error', 'message': 'Bạn không thể tự kết bạn với chính mình!'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Đã là bạn bè?
+    if Friendship.are_friends(request.user, target_user):
+        return Response({'status': 'info', 'message': f'Bạn và {target_user.profile.get_display_name()} đã là bạn bè rồi.'})
+
+    # Đã có lời mời đang chờ từ phía mình?
+    existing_sent = FriendRequest.objects.filter(sender=request.user, receiver=target_user, status='pending').first()
+    if existing_sent:
+        return Response({'status': 'info', 'message': 'Bạn đã gửi lời mời kết bạn rồi, đang chờ đối phương đồng ý.'})
+
+    # Nếu đối phương ĐÃ gửi lời mời cho mình trước đó -> Tự động chấp nhận luôn!
+    incoming = FriendRequest.objects.filter(sender=target_user, receiver=request.user, status='pending').first()
+    if incoming:
+        incoming.status = 'accepted'
+        incoming.save(update_fields=['status', 'updated_at'])
+        Friendship.make_friends(request.user, target_user)
+        conv = Conversation.objects.filter(is_group=False, memberships__user=request.user).filter(memberships__user=target_user).first()
+        if not conv:
+            conv = Conversation.objects.create(is_group=False, created_by=request.user)
+            ConversationMember.objects.create(conversation=conv, user=request.user, role='member')
+            ConversationMember.objects.create(conversation=conv, user=target_user, role='member')
+        return Response({'status': 'success', 'is_friend': True, 'message': f'Hai bạn đã trở thành bạn bè!', 'conversation_id': conv.id})
+
+    # Tạo lời mời mới
+    req = FriendRequest.objects.create(sender=request.user, receiver=target_user, status='pending')
+
+    # Bắn sự kiện thời gian thực qua WebSocket
+    channel_layer = get_channel_layer()
+    if channel_layer:
+        sp = getattr(request.user, 'profile', None)
+        async_to_sync(channel_layer.group_send)(
+            f"user_{target_user.id}",
+            {
+                'type': 'broadcast_friend_event',
+                'event': 'friend_request_received',
+                'data': {
+                    'id': req.id,
+                    'sender_id': request.user.id,
+                    'username': request.user.username,
+                    'display_name': sp.get_display_name() if sp else request.user.username,
+                    'avatar_url': sp.get_avatar_url() if sp else None,
+                    'phone': sp.phone if sp else '',
+                    'created_at': req.created_at.strftime('%H:%M %d/%m/%Y')
+                }
+            }
+        )
+
+    return Response({
+        'status': 'success',
+        'message': f'Đã gửi lời mời kết bạn đến {target_user.profile.get_display_name()}!'
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_respond_friend_request(request):
+    """Đồng ý hoặc từ chối lời mời kết bạn."""
+    request_id = request.data.get('request_id')
+    action = request.data.get('action')  # 'accept' hoặc 'reject'
+
+    req = FriendRequest.objects.filter(id=request_id, receiver=request.user, status='pending').first()
+    if not req:
+        return Response({'status': 'error', 'message': 'Lời mời kết bạn không tồn tại hoặc đã được xử lý.'}, status=status.HTTP_404_NOT_FOUND)
+
+    sender = req.sender
+    receiver = req.receiver
+    channel_layer = get_channel_layer()
+
+    if action == 'accept':
+        req.status = 'accepted'
+        req.save(update_fields=['status', 'updated_at'])
+        Friendship.make_friends(sender, receiver)
+
+        # Tạo hoặc lấy hội thoại 1-1
+        conv = Conversation.objects.filter(is_group=False, memberships__user=sender).filter(memberships__user=receiver).first()
+        if not conv:
+            conv = Conversation.objects.create(is_group=False, created_by=receiver)
+            ConversationMember.objects.create(conversation=conv, user=receiver, role='member')
+            ConversationMember.objects.create(conversation=conv, user=sender, role='member')
+
+        # Thông báo cho sender qua WebSocket
+        if channel_layer:
+            rp = getattr(receiver, 'profile', None)
+            async_to_sync(channel_layer.group_send)(
+                f"user_{sender.id}",
+                {
+                    'type': 'broadcast_friend_event',
+                    'event': 'friend_request_accepted',
+                    'data': {
+                        'friend_id': receiver.id,
+                        'display_name': rp.get_display_name() if rp else receiver.username,
+                        'avatar_url': rp.get_avatar_url() if rp else None,
+                        'conversation_id': conv.id
+                    }
+                }
+            )
+
+        return Response({
+            'status': 'success',
+            'action': 'accepted',
+            'message': f'Đã đồng ý kết bạn với {sender.profile.get_display_name()}!',
+            'conversation_id': conv.id
+        })
+    elif action == 'reject':
+        req.status = 'rejected'
+        req.save(update_fields=['status', 'updated_at'])
+        return Response({
+            'status': 'success',
+            'action': 'rejected',
+            'message': 'Đã từ chối lời mời kết bạn.'
+        })
+
+    return Response({'status': 'error', 'message': 'Hành động không hợp lệ.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET', 'POST'])

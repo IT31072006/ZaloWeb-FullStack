@@ -162,6 +162,39 @@ CREATE TABLE IF NOT EXISTS chat_message_deleted_by (
 CREATE INDEX IF NOT EXISTS idx_deleted_msg ON chat_message_deleted_by(message_id);
 CREATE INDEX IF NOT EXISTS idx_deleted_user ON chat_message_deleted_by(user_id);
 
+-- 8. BẢNG QUAN HỆ BẠN BÈ (chat_friendship)
+-- Lưu trữ danh sách bạn bè 2 chiều giữa 2 tài khoản
+CREATE TABLE IF NOT EXISTS chat_friendship (
+    id BIGSERIAL PRIMARY KEY,
+    user1_id INTEGER NOT NULL,
+    user2_id INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_friendship UNIQUE (user1_id, user2_id),
+    CONSTRAINT fk_friendship_u1 FOREIGN KEY (user1_id) REFERENCES auth_user(id) ON DELETE CASCADE,
+    CONSTRAINT fk_friendship_u2 FOREIGN KEY (user2_id) REFERENCES auth_user(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendship_u1 ON chat_friendship(user1_id);
+CREATE INDEX IF NOT EXISTS idx_friendship_u2 ON chat_friendship(user2_id);
+
+-- 9. BẢNG LỜI MỜI KẾT BẠN (chat_friendrequest)
+-- Quản lý lời mời kết bạn gửi đi và nhận lại: pending, accepted, rejected
+CREATE TABLE IF NOT EXISTS chat_friendrequest (
+    id BIGSERIAL PRIMARY KEY,
+    sender_id INTEGER NOT NULL,
+    receiver_id INTEGER NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_friend_request UNIQUE (sender_id, receiver_id),
+    CONSTRAINT fk_request_sender FOREIGN KEY (sender_id) REFERENCES auth_user(id) ON DELETE CASCADE,
+    CONSTRAINT fk_request_receiver FOREIGN KEY (receiver_id) REFERENCES auth_user(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendreq_sender ON chat_friendrequest(sender_id);
+CREATE INDEX IF NOT EXISTS idx_friendreq_receiver ON chat_friendrequest(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_friendreq_status ON chat_friendrequest(status);
+
 -- ==============================================================================
 -- 📌 CƠ CHẾ BẢO ĐẢM TÍNH BỀN VỮNG (PERSISTENCE GUARANTEE):
 -- 1. Khi người dùng gửi tin nhắn qua giao diện Web:

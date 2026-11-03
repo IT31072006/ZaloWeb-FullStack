@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Cuộc gọi WebRTC Video Call - Zalo Desktop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/static/css/zalo.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html {
+      width: 100%; height: 100%;
+      background: #11141a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+    .call-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      position: relative;
+      background: radial-gradient(circle at center, #1b2230 0%, #0d1117 100%);
+    }
+    .call-top-bar {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      background: rgba(13, 17, 23, 0.7);
+      backdrop-filter: blur(10px);
+      z-index: 10;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .user-info-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .user-avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 2px solid #0068ff;
+      object-fit: cover;
+    }
+    .user-name-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .call-status-badge {
+      font-size: 12px;
+      color: #4cd964;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background-color: #4cd964;
+      border-radius: 50%;
+      display: inline-block;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(76, 217, 100, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(76, 217, 100, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(76, 217, 100, 0); }
+    }
+    .call-stage {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+    .local-pip {
+      position: absolute;
+      bottom: 96px;
+      right: 24px;
+      width: 220px;
+      height: 140px;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      z-index: 5;
+      background: #000;
+    }
+    .local-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    .pip-label {
+      position: absolute;
+      bottom: 6px;
+      left: 8px;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #fff;
+    }
+    .avatar-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      z-index: 2;
+    }
+    .radar-circle {
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      background: rgba(0, 104, 255, 0.15);
+      border: 2px solid rgba(0, 104, 255, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      animation: radar-wave 2s infinite ease-out;
+    }
+    @keyframes radar-wave {
+      0% { transform: scale(0.9); opacity: 0.8; }
+      50% { transform: scale(1.1); opacity: 0.3; }
+      100% { transform: scale(0.9); opacity: 0.8; }
+    }
+    .avatar-large {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      border: 3px solid #0068ff;
+      object-fit: cover;
+    }
+    .stage-peer-name {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .stage-status-text {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+    .call-controls-bar {
+      height: 84px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      background: rgba(13, 17, 23, 0.85);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      z-index: 10;
+    }
+    .ctrl-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.22);
+      transform: scale(1.06);
+    }
+    .ctrl-btn.btn-active-off {
+      background: #ff3b30;
+      color: #fff;
+    }
+    .ctrl-btn.btn-end-call {
+      background: #e53935;
+      width: 58px;
+      height: 58px;
+    }
+    .ctrl-btn.btn-end-call:hover {
+      background: #c62828;
+      transform: scale(1.08);
+    }
+    .ctrl-btn svg {
+      width: 26px;
+      height: 26px;
+      fill: currentColor;
+    }
+  </style>
+</head>
+<body>
+  <div class="call-container">
+    <!-- Top Header -->
+    <div class="call-top-bar">
+      <div class="user-info-row">
+        <img id="peerAvatar" class="user-avatar" src="https://ui-avatars.com/api/?name=User&background=0068ff&color=ffffff" alt="Avatar">
+        <div>
+          <div class="user-name-title" id="peerDisplayName">Đang kết nối...</div>
+          <div class="call-status-badge">
+            <span class="live-dot" id="liveDot" style="display:none;"></span>
+            <span id="callTimerText">Đang thiết lập WebRTC P2P...</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <span style="font-size: 12px; background: rgba(0, 104, 255, 0.2); color: #409eff; padding: 4px 10px; border-radius: 12px; border: 1px solid rgba(0, 104, 255, 0.3);">
+          ⚡ WebRTC P2P (Môn Lập Trình Mạng)
+        </span>
+      </div>
+    </div>
+
+    <!-- Main Stage -->
+    <div class="call-stage" id="callStage">
+      <!-- Remote Video -->
+      <video id="remoteVideo" class="remote-video" autoplay playsinline></video>
+
+      <!-- Connecting / Voice Visualizer Stage -->
+      <div class="avatar-stage" id="avatarStage">
+        <div class="radar-circle">
+          <img id="avatarStageImg" class="avatar-large" src="https://ui-avatars.com/api/?name=User&background=0068ff&color=ffffff" alt="Avatar">
+        </div>
+        <div class="stage-peer-name" id="stagePeerName">Bạn bè</div>
+        <div class="stage-status-text" id="stageStatus">Đang gửi tín hiệu Báo hiệu (Signaling)...</div>
+      </div>
+
+      <!-- Local PIP Video -->
+      <div class="local-pip" id="localPip">
+        <video id="localVideo" class="local-video" autoplay playsinline muted></video>
+        <div class="pip-label">Bạn</div>
+      </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div class="call-controls-bar">
+      <button class="ctrl-btn" id="btnToggleMic" title="Tắt / Bật Mic">
+        <svg viewBox="0 0 24 24" id="iconMic"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+      </button>
+
+      <button class="ctrl-btn" id="btnToggleCam" title="Tắt / Bật Camera">
+        <svg viewBox="0 0 24 24" id="iconCam"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+      </button>
+
+      <button class="ctrl-btn" id="btnToggleShare" title="Chia sẻ màn hình">
+        <svg viewBox="0 0 24 24"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6zm9 7h-2v-2H9l3-3 3 3h-2v2z"/></svg>
+      </button>
+
+      <button class="ctrl-btn btn-end-call" id="btnEndCall" title="Kết thúc cuộc gọi">
+        <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    // Lấy các tham số từ URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const convId = urlParams.get('conv') || '1';
+    const currentUser = urlParams.get('user') || 'User';
+    const peerName = urlParams.get('peer') || 'Bạn bè';
+    const role = urlParams.get('role') || 'caller';
+    const roomId = urlParams.get('room') || ('call_' + convId);
+
+    // Cập nhật UI
+    document.getElementById('peerDisplayName').innerText = peerName;
+    document.getElementById('stagePeerName').innerText = peerName;
+    const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(peerName)}&background=0068ff&color=ffffff&bold=true&size=128`;
+    document.getElementById('peerAvatar').src = avatarUrl;
+    document.getElementById('avatarStageImg').src = avatarUrl;
+
+    // WebRTC State
+    let localStream = null;
+    let peerConnection = null;
+    let chatSocket = null;
+    let callTimer = null;
+    let callSeconds = 0;
+    let isMicMuted = false;
+    let isCamOff = false;
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    };
+
+    // 1. Khởi tạo Camera & Mic
+    async function initMedia() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('localVideo').srcObject = localStream;
+      } catch (e) {
+        console.warn("Không thể mở Camera:", e);
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        } catch (ae) {
+          console.error("Không thể mở Mic:", ae);
+        }
+      }
+    }
+
+    // 2. Kết nối WebSocket Signaling (Kênh Báo hiệu)
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/chat/${convId}/`;
+      
+      chatSocket = new WebSocket(wsUrl);
+
+      chatSocket.onopen = () => {
+        console.log("[Signaling] WebSocket đã kết nối");
+        document.getElementById('stageStatus').innerText = "Đã kết nối Signaling. Đang đàm phán P2P...";
+        
+        createPeerConnection();
+
+        if (role === 'caller') {
+          startOffer();
+        }
+      };
+
+      chatSocket.onmessage = async (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'webrtc_signal') {
+            await handleSignalingMessage(data);
+          }
+        } catch (err) {
+          console.warn("Lỗi phân tích WebSocket message:", err);
+        }
+      };
+
+      chatSocket.onclose = () => {
+        console.log("[Signaling] WebSocket đóng");
+      };
+    }
+
+    // 3. Khởi tạo RTCPeerConnection
+    function createPeerConnection() {
+      if (peerConnection) return;
+
+      peerConnection = new RTCPeerConnection(rtcConfig);
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+      }
+
+      peerConnection.ontrack = (event) => {
+        console.log("[WebRTC] Nhận remote stream track:", event.track.kind);
+        const remoteVideo = document.getElementById('remoteVideo');
+        if (event.streams && event.streams[0]) {
+          remoteVideo.srcObject = event.streams[0];
+        } else {
+          if (!remoteVideo.srcObject) remoteVideo.srcObject = new MediaStream();
+          remoteVideo.srcObject.addTrack(event.track);
+        }
+        remoteVideo.style.display = 'block';
+        document.getElementById('avatarStage').style.display = 'none';
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate && chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+          chatSocket.send(JSON.stringify({
+            type: 'webrtc_signal',
+            action: 'ice_candidate',
+            candidate: event.candidate,
+          }));
+        }
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        console.log("[WebRTC] Connection state:", peerConnection.connectionState);
+        if (peerConnection.connectionState === 'connected') {
+          document.getElementById('liveDot').style.display = 'inline-block';
+          startTimer();
+        } else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
+          endCall();
+        }
+      };
+    }
+
+    // 4. Tạo và gửi SDP Offer
+    async function startOffer() {
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        chatSocket.send(JSON.stringify({
+          type: 'webrtc_signal',
+          action: 'sdp_offer',
+          sdp: offer,
+        }));
+      } catch (e) {
+        console.error("Lỗi tạo Offer:", e);
+      }
+    }
+
+    // 5. Xử lý các thông điệp Signaling nhận được
+    async function handleSignalingMessage(data) {
+      const action = data.action;
+
+      if (action === 'sdp_offer' && role !== 'caller') {
+        createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        chatSocket.send(JSON.stringify({
+          type: 'webrtc_signal',
+          action: 'sdp_answer',
+          sdp: answer,
+        }));
+      } else if (action === 'sdp_answer') {
+        if (peerConnection) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        }
+      } else if (action === 'ice_candidate') {
+        if (peerConnection && data.candidate) {
+          try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } catch (e) {
+            console.warn("Lỗi addIceCandidate:", e);
+          }
+        }
+      } else if (action === 'call_end' || action === 'call_reject') {
+        alert("Cuộc gọi đã kết thúc.");
+        window.close();
+      }
+    }
+
+    // 6. Bộ đếm thời gian cuộc gọi
+    function startTimer() {
+      if (callTimer) return;
+      callSeconds = 0;
+      callTimer = setInterval(() => {
+        callSeconds++;
+        const mins = String(Math.floor(callSeconds / 60)).padStart(2, '0');
+        const secs = String(callSeconds % 60).padStart(2, '0');
+        document.getElementById('callTimerText').innerText = `${mins}:${secs}`;
+      }, 1000);
+    }
+
+    // 7. Kết thúc cuộc gọi
+    function endCall() {
+      if (callTimer) clearInterval(callTimer);
+      if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+        chatSocket.send(JSON.stringify({
+          type: 'webrtc_signal',
+          action: 'call_end'
+        }));
+      }
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+      }
+      if (peerConnection) {
+        peerConnection.close();
+      }
+      setTimeout(() => {
+        window.close();
+      }, 300);
+    }
+
+    // Controls
+    document.getElementById('btnEndCall').onclick = endCall;
+
+    document.getElementById('btnToggleMic').onclick = () => {
+      if (!localStream) return;
+      isMicMuted = !isMicMuted;
+      localStream.getAudioTracks().forEach(t => t.enabled = !isMicMuted);
+      document.getElementById('btnToggleMic').classList.toggle('btn-active-off', isMicMuted);
+    };
+
+    document.getElementById('btnToggleCam').onclick = () => {
+      if (!localStream) return;
+      isCamOff = !isCamOff;
+      localStream.getVideoTracks().forEach(t => t.enabled = !isCamOff);
+      document.getElementById('btnToggleCam').classList.toggle('btn-active-off', isCamOff);
+    };
+
+    document.getElementById('btnToggleShare').onclick = async () => {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const screenTrack = screenStream.getVideoTracks()[0];
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) {
+          sender.replaceTrack(screenTrack);
+        }
+        screenTrack.onended = () => {
+          if (localStream) {
+            const camTrack = localStream.getVideoTracks()[0];
+            if (sender && camTrack) sender.replaceTrack(camTrack);
+          }
+        };
+      } catch (e) {
+        console.warn("Lỗi chia sẻ màn hình:", e);
+      }
+    };
+
+    // Khởi chạy
+    (async () => {
+      await initMedia();
+      initWebSocket();
+    })();
+  </script>
+</body>
+</html>

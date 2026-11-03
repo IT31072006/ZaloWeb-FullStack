@@ -3168,7 +3168,11 @@ body.dark-theme .drag-overlay-card {
   object-fit: cover;
   background: transparent;
   display: none;
-  z-index: 2;
+  z-index: 10;
+}
+.remote-video.screen-share {
+  object-fit: contain !important;
+  background: #000;
 }
 
 /* Radar & Avatar Visualizer Stage */
@@ -3257,15 +3261,40 @@ body.dark-theme .drag-overlay-card {
   height: 115px;
   border-radius: 12px;
   overflow: hidden;
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.4);
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
-  z-index: 20;
+  z-index: 25;
   background: #1e293b;
+  cursor: pointer;
   transition: all 0.2s ease;
 }
 .local-video-pip:hover {
   border-color: #0068ff;
-  transform: scale(1.02);
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(0, 104, 255, 0.5);
+}
+.pip-swap-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all 0.15s;
+  z-index: 30;
+}
+.pip-swap-btn:hover {
+  background: #0068ff;
+  border-color: #0068ff;
+  transform: scale(1.1);
 }
 .local-video {
   width: 100%;

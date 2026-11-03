@@ -214,3 +214,59 @@ class Task(models.Model):
     def __str__(self):
         return f"{self.title} ({'Đã xong' if self.done else 'Đang làm'})"
 
+
+class Friendship(models.Model):
+    user1 = models.ForeignKey(User, on_delete=models.CASCADE, related_name='friendships1', db_column='user1_id')
+    user2 = models.ForeignKey(User, on_delete=models.CASCADE, related_name='friendships2', db_column='user2_id')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'chat_friendship'
+        unique_together = ('user1', 'user2')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user1.username} - {self.user2.username}"
+
+    @classmethod
+    def are_friends(cls, u1, u2):
+        return cls.objects.filter(
+            models.Q(user1=u1, user2=u2) | models.Q(user1=u2, user2=u1)
+        ).exists()
+
+    @classmethod
+    def make_friends(cls, u1, u2):
+        if not cls.are_friends(u1, u2) and u1.id != u2.id:
+            uid1, uid2 = min(u1.id, u2.id), max(u1.id, u2.id)
+            usr1 = u1 if u1.id == uid1 else u2
+            usr2 = u2 if u2.id == uid2 else u1
+            cls.objects.get_or_create(user1=usr1, user2=usr2)
+
+    @classmethod
+    def get_friend_ids(cls, user):
+        f1 = cls.objects.filter(user1=user).values_list('user2_id', flat=True)
+        f2 = cls.objects.filter(user2=user).values_list('user1_id', flat=True)
+        return list(f1) + list(f2)
+
+
+class FriendRequest(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Chờ đồng ý'),
+        ('accepted', 'Đã đồng ý'),
+        ('rejected', 'Đã từ chối'),
+    ]
+
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_friend_requests', db_column='sender_id')
+    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_friend_requests', db_column='receiver_id')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'chat_friendrequest'
+        unique_together = ('sender', 'receiver')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.sender.username} -> {self.receiver.username} ({self.status})"
+

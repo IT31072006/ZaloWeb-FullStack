@@ -5,6 +5,7 @@ urlpatterns = [
     # Pages
     path('', views.index_view, name='index'),
     path('auth/', views.auth_view, name='auth'),
+    path('call/', views.call_window_view, name='call_window'),
 
     # Auth APIs
     path('api/register/', views.api_register, name='api_register'),
@@ -45,5 +46,7 @@ urlpatterns = [
     # Extended Features
     path('api/cloud/', views.api_cloud, name='api_cloud'),
     path('api/contacts/', views.api_contacts, name='api_contacts'),
+    path('api/friends/request/', views.api_send_friend_request, name='api_send_friend_request'),
+    path('api/friends/respond/', views.api_respond_friend_request, name='api_respond_friend_request'),
     path('api/tasks/', views.api_tasks, name='api_tasks'),
 ]

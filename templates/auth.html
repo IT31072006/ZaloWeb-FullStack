@@ -64,6 +64,18 @@
     </div>
 
     <form id="authPageForm" onsubmit="return false;">
+      <!-- Network Server Config (Địa chỉ IP và Cổng Port môn Lập trình Mạng) -->
+      <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+        <div class="form-group-item" style="flex: 2;">
+          <label>Địa chỉ IP Máy chủ (Server IP)</label>
+          <input type="text" id="authServerIp" value="127.0.0.1" placeholder="127.0.0.1 hoặc IP LAN" style="padding: 10px 14px;">
+        </div>
+        <div class="form-group-item" style="flex: 1;">
+          <label>Cổng Port</label>
+          <input type="text" id="authServerPort" value="8000" placeholder="8000" style="padding: 10px 14px;">
+        </div>
+      </div>
+
       <div class="form-group-item" style="margin-bottom: 14px;">
         <label>Tên đăng nhập hoặc Số điện thoại</label>
         <input type="text" id="authUsername" placeholder="Nhập tài khoản" style="padding: 10px 14px;">

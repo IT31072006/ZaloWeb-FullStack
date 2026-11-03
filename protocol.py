@@ -16,15 +16,25 @@ HEADER_FORMAT = "!I"  # 4 bytes unsigned int (Big-endian / Network byte order)
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 # Các loại thông điệp (Message Types)
-MSG_TYPE_JOIN = "JOIN"                      # Client xin tham gia phòng chat kèm nickname
-MSG_TYPE_JOIN_ACK = "JOIN_ACK"              # Server xác nhận chấp nhận/từ chối nickname
-MSG_TYPE_CHAT = "CHAT"                      # Tin nhắn chat công khai (Broadcast)
+MSG_TYPE_JOIN = "JOIN"                      # Client xin tham gia phòng chat kèm nickname (legacy)
+MSG_TYPE_JOIN_ACK = "JOIN_ACK"              # Server xác nhận chấp nhận/từ chối nickname (legacy)
+MSG_TYPE_LOGIN = "LOGIN"                    # Client đăng nhập với username và password từ PostgreSQL
+MSG_TYPE_LOGIN_ACK = "LOGIN_ACK"            # Server trả về kết quả đăng nhập, user info và danh sách hội thoại
+MSG_TYPE_LOAD_HISTORY = "LOAD_HISTORY"      # Client yêu cầu tải lịch sử tin nhắn của một hội thoại từ DB
+MSG_TYPE_HISTORY_ACK = "HISTORY_ACK"        # Server gửi về danh sách tin nhắn lịch sử từ CSDL
+MSG_TYPE_CHAT = "CHAT"                      # Tin nhắn chat hội thoại / công khai
 MSG_TYPE_PRIVATE = "PRIVATE"                # Tin nhắn chat riêng tư (1-1)
 MSG_TYPE_VOICE = "VOICE"                    # Tin nhắn thoại ghi âm (Audio Voice Note Base64)
-MSG_TYPE_FILE = "FILE"                      # Tệp tin / tài liệu đính kèm (File Attachment Base64)
+MSG_TYPE_FILE = "FILE"                      # Tệp tin / hình ảnh đính kèm (File Attachment Base64)
 MSG_TYPE_USER_LIST = "USER_LIST"            # Server gửi danh sách các user đang online
 MSG_TYPE_SYSTEM = "SYSTEM"                  # Thông báo hệ thống (vào/ra phòng, cảnh báo)
 MSG_TYPE_QUIT = "QUIT"                      # Client thông báo rời phòng
+
+# Thông điệp Báo hiệu Cuộc gọi WebRTC (WebRTC Call Signaling qua TCP Socket)
+MSG_TYPE_CALL_REQ = "CALL_REQ"              # A yêu cầu gọi video tới B (caller -> server -> callee)
+MSG_TYPE_CALL_RESP = "CALL_RESP"            # B trả lời chấp nhận hoặc từ chối cuộc gọi (callee -> server -> caller)
+MSG_TYPE_CALL_SIGNAL = "CALL_SIGNAL"        # Truyền tín hiệu SDP Offer/Answer hoặc ICE Candidate giữa A và B
+MSG_TYPE_CALL_END = "CALL_END"              # Kết thúc cuộc gọi và ghi lịch sử vào CSDL
 
 
 def send_packet(sock: socket.socket, data: dict) -> bool:

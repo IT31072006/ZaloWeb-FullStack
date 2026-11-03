@@ -338,11 +338,28 @@ function switchAuthTab(tab) {
 
 async function handleAuthSubmit() {
   const isRegister = document.getElementById('authTabRegister')?.classList.contains('active');
+  const serverIp = document.getElementById('authServerIp')?.value.trim() || '127.0.0.1';
+  const serverPort = document.getElementById('authServerPort')?.value.trim() || '8000';
   const username = document.getElementById('authUsername')?.value.trim();
   const password = document.getElementById('authPassword')?.value.trim();
 
   if (!username || !password) {
     showToast("Vui lòng điền đầy đủ tên đăng nhập và mật khẩu!");
+    return;
+  }
+
+  // Lưu cấu hình IP và Port vào LocalStorage
+  localStorage.setItem('zalo_server_ip', serverIp);
+  localStorage.setItem('zalo_server_port', serverPort);
+
+  // Nếu người dùng nhập IP khác máy hiện tại (ví dụ kết nối mạng LAN tới máy bạn)
+  const currentHost = window.location.hostname;
+  const currentPort = window.location.port || '8000';
+  const isDifferentHost = (serverIp !== currentHost && serverIp !== 'localhost' && serverIp !== '127.0.0.1');
+  const isDifferentPort = (serverPort !== currentPort);
+
+  if (isDifferentHost || isDifferentPort) {
+    window.location.href = `${window.location.protocol}//${serverIp}:${serverPort}/`;
     return;
   }
 
@@ -1867,6 +1884,10 @@ async function sendCodeSnippet() {
 
 async function startVoiceRecording() {
   if (state.isRecording) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast("⚠️ Trình duyệt chặn Micro trên HTTP ngoài mạng. Hãy cấu hình cờ chrome://flags hoặc dùng HTTPS!", 6000);
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     state.mediaRecorder = new MediaRecorder(stream);
@@ -2027,7 +2048,38 @@ async function loadContacts() {
     addFriendBanner.onclick = openNewChatModal;
     container.appendChild(addFriendBanner);
 
-    // Groups Section
+    // 1. Lời mời kết bạn đang chờ (Pending Friend Requests)
+    if (data.friend_requests && data.friend_requests.length > 0) {
+      const reqHeading = document.createElement('div');
+      reqHeading.className = 'contacts-section-heading';
+      reqHeading.innerHTML = `🔔 Lời mời kết bạn (${data.friend_requests.length})`;
+      reqHeading.style.color = '#0068ff';
+      container.appendChild(reqHeading);
+
+      data.friend_requests.forEach(r => {
+        const card = document.createElement('div');
+        card.className = 'contact-item-card friend-req-card';
+        card.style.cssText = 'background: rgba(0, 104, 255, 0.06); border-left: 3px solid #0068ff; margin-bottom: 6px;';
+        card.innerHTML = `
+          <div class="contact-item-left">
+            <div class="contact-avatar-wrapper">
+              <img src="${r.sender_avatar || 'https://ui-avatars.com/api/?name=User&background=0068ff&color=ffffff'}" alt="${escapeHtml(r.display_name)}">
+            </div>
+            <div class="contact-info-text">
+              <div class="contact-name">${escapeHtml(r.display_name)}</div>
+              <div class="contact-sub">${r.phone ? r.phone : `@${r.username}`} • ${r.created_at}</div>
+            </div>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="contact-chat-btn" style="background:#16a34a; padding:6px 12px; font-weight:600;" onclick="respondFriendRequest(${r.id}, 'accept')">Đồng ý</button>
+            <button class="contact-chat-btn" style="background:#64748b; padding:6px 10px;" onclick="respondFriendRequest(${r.id}, 'reject')">Từ chối</button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    // 2. Nhóm đã tham gia (Groups Section)
     if (data.groups && data.groups.length > 0) {
       const grpHeading = document.createElement('div');
       grpHeading.className = 'contacts-section-heading';
@@ -2057,13 +2109,13 @@ async function loadContacts() {
       });
     }
 
-    // Friends Section
-    if (data.contacts && data.contacts.length > 0) {
-      const friendHeading = document.createElement('div');
-      friendHeading.className = 'contacts-section-heading';
-      friendHeading.innerText = `Danh sách bạn bè (${data.contacts.length})`;
-      container.appendChild(friendHeading);
+    // 3. Danh sách bạn bè (Friends Section)
+    const friendHeading = document.createElement('div');
+    friendHeading.className = 'contacts-section-heading';
+    friendHeading.innerText = `Danh sách bạn bè (${data.contacts ? data.contacts.length : 0})`;
+    container.appendChild(friendHeading);
 
+    if (data.contacts && data.contacts.length > 0) {
       data.contacts.forEach(u => {
         const card = document.createElement('div');
         card.className = 'contact-item-card';
@@ -2084,6 +2136,15 @@ async function loadContacts() {
         card.onclick = () => startDirectChatWithUser(u.id);
         container.appendChild(card);
       });
+    } else {
+      const emptyCard = document.createElement('div');
+      emptyCard.style.cssText = 'padding: 28px 16px; text-align: center; color: var(--zalo-text-muted);';
+      emptyCard.innerHTML = `
+        <div style="font-size: 32px; margin-bottom: 6px;">👥</div>
+        <div style="font-weight: 600; color: var(--zalo-text-primary); margin-bottom: 4px;">Chưa có bạn bè trong danh bạ</div>
+        <div style="font-size: 13px; line-height: 1.4;">Nhấn vào ô <b>"Thêm bạn mới"</b> ở trên và nhập số điện thoại hoặc tài khoản để kết bạn nhé!</div>
+      `;
+      container.appendChild(emptyCard);
     }
   } catch (err) {
     container.innerHTML = '<div style="padding:16px; color:#d32f2f;">Lỗi khi tải danh bạ!</div>';
@@ -2255,8 +2316,58 @@ async function submitCreateTask() {
 // 9. ADD FRIEND & SEARCH BY PHONE NUMBER (Zalo Web Style)
 // --------------------------------------------------------------------------
 
-function handleAddFriendRequest(userId, displayName) {
-  showToast(`Đã gửi lời mời kết bạn đến ${displayName}!`);
+async function handleAddFriendRequest(userId, displayName) {
+  try {
+    const res = await fetch('/api/friends/request/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken'),
+      },
+      body: JSON.stringify({ user_id: userId })
+    });
+    const data = await res.json();
+    if (data.status === 'success') {
+      showToast(data.message || `Đã gửi lời mời kết bạn đến ${displayName}!`);
+      const btn = document.getElementById(`btnSendFriendReq-${userId}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = "⏳ Đã gửi lời mời";
+        btn.style.opacity = '0.75';
+      }
+      await loadContacts();
+    } else {
+      showToast(data.message || "Không thể gửi lời mời kết bạn.");
+    }
+  } catch (e) {
+    showToast("Lỗi gửi lời mời kết bạn!");
+  }
+}
+
+async function respondFriendRequest(requestId, action) {
+  try {
+    const res = await fetch('/api/friends/respond/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken'),
+      },
+      body: JSON.stringify({ request_id: requestId, action: action })
+    });
+    const data = await res.json();
+    if (data.status === 'success') {
+      showToast(data.message);
+      await loadContacts();
+      if (action === 'accept' && data.conversation_id) {
+        await loadConversations();
+        selectConversation(data.conversation_id);
+      }
+    } else {
+      showToast(data.message || "Lỗi xử lý lời mời!");
+    }
+  } catch (e) {
+    showToast("Lỗi kết nối máy chủ!");
+  }
 }
 
 async function searchFriendByPhone(phoneQuery) {
@@ -2266,7 +2377,7 @@ async function searchFriendByPhone(phoneQuery) {
 
   const phone = (phoneQuery !== undefined ? phoneQuery : (input ? input.value : '')).trim();
   if (!phone) {
-    showToast("Vui lòng nhập số điện thoại cần tìm!");
+    showToast("Vui lòng nhập số điện thoại hoặc tên tài khoản cần tìm!");
     if (input) input.focus();
     return;
   }
@@ -2286,6 +2397,44 @@ async function searchFriendByPhone(phoneQuery) {
     if (data.status === 'found') {
       const u = data.user;
       const onlineDot = u.is_online ? '<div class="contact-online-dot"></div>' : '';
+
+      let actionBtnHtml = '';
+      if (u.is_friend) {
+        actionBtnHtml = `
+          <button class="btn-card-action primary" onclick="startDirectChatWithUser(${u.id})">
+            <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0-2-.9-2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
+            Nhắn tin (Bạn bè)
+          </button>
+        `;
+      } else if (u.has_sent_request) {
+        actionBtnHtml = `
+          <button class="btn-card-action primary" onclick="startDirectChatWithUser(${u.id})">
+            <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0-2-.9-2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
+            Nhắn tin
+          </button>
+          <button class="btn-card-action secondary" disabled style="opacity:0.75; cursor:default;">
+            ⏳ Đã gửi lời mời
+          </button>
+        `;
+      } else if (u.incoming_request_id) {
+        actionBtnHtml = `
+          <button class="btn-card-action primary" style="background:#16a34a;" onclick="respondFriendRequest(${u.incoming_request_id}, 'accept')">
+            ✓ Đồng ý kết bạn
+          </button>
+        `;
+      } else {
+        actionBtnHtml = `
+          <button class="btn-card-action primary" onclick="startDirectChatWithUser(${u.id})">
+            <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0-2-.9-2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
+            Nhắn tin
+          </button>
+          <button class="btn-card-action secondary" id="btnSendFriendReq-${u.id}" onclick="handleAddFriendRequest(${u.id}, '${escapeHtml(u.display_name)}')">
+            <svg viewBox="0 0 24 24"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+            Kết bạn
+          </button>
+        `;
+      }
+
       resultArea.innerHTML = `
         <div class="found-user-card">
           <div class="user-card-cover"></div>
@@ -2301,14 +2450,7 @@ async function searchFriendByPhone(phoneQuery) {
             </div>
             ${u.bio ? `<div class="user-card-bio">"${escapeHtml(u.bio)}"</div>` : ''}
             <div class="user-card-actions">
-              <button class="btn-card-action primary" onclick="startDirectChatWithUser(${u.id})">
-                <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0-2-.9-2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>
-                Nhắn tin
-              </button>
-              <button class="btn-card-action secondary" onclick="handleAddFriendRequest(${u.id}, '${escapeHtml(u.display_name)}')">
-                <svg viewBox="0 0 24 24"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-                Kết bạn
-              </button>
+              ${actionBtnHtml}
             </div>
           </div>
         </div>
@@ -3139,6 +3281,15 @@ function handleWebSocketMessage(data) {
     updatePinnedMessageBanner(data.pinned_message);
   } else if (type === 'user_status') {
     console.log(`[Presence] Người dùng ${data.display_name} hiện đang ${data.status}`);
+  } else if (type === 'friend_request_received') {
+    showToast(`🔔 ${data.data?.display_name || 'Ai đó'} vừa gửi lời mời kết bạn cho bạn!`, 6000);
+    playNotificationSound();
+    loadContacts();
+  } else if (type === 'friend_request_accepted') {
+    showToast(`🎉 ${data.data?.display_name || 'Bạn bè'} đã chấp nhận lời mời kết bạn!`, 6000);
+    playNotificationSound();
+    loadConversations();
+    loadContacts();
   } else if (type === 'webrtc_signal') {
     handleWebRTCSignalMessage(data);
   }
@@ -3277,10 +3428,38 @@ function createVirtualVideoStream(avatarUrl, displayName) {
   return canvas.captureStream(25);
 }
 
-// Robust Media Stream Acquirer: Falls back gracefully if physical webcam is locked by another tab on same PC
+function createSilentAudioTrack() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    const ctx = new AudioCtx();
+    const oscillator = ctx.createOscillator();
+    const dst = oscillator.connect(ctx.createMediaStreamDestination());
+    oscillator.start();
+    const track = dst.stream.getAudioTracks()[0];
+    track.enabled = false;
+    return track;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Robust Media Stream Acquirer: Falls back gracefully if physical webcam is locked by another tab on same PC or blocked on insecure HTTP LAN
 async function acquireMediaStream(isVideo, user) {
   let stream = null;
   state.isVirtualCam = false;
+
+  const hasMediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  if (!hasMediaDevices) {
+    console.warn("[WebRTC] navigator.mediaDevices.getUserMedia không khả dụng (do truy cập qua HTTP ngoài localhost mà trình duyệt chặn quyền Camera/Micro).");
+    showToast("⚠️ Trình duyệt chặn Camera/Micro trên HTTP! Hãy cấu hình cờ chrome://flags hoặc dùng HTTPS để đàm thoại thực tế.", 7000);
+    const virtualStream = createVirtualVideoStream(user?.avatar_url, user?.display_name);
+    state.isVirtualCam = true;
+    const silentAudio = createSilentAudioTrack();
+    const combinedTracks = [...virtualStream.getVideoTracks()];
+    if (silentAudio) combinedTracks.push(silentAudio);
+    return new MediaStream(combinedTracks);
+  }
 
   if (isVideo) {
     try {
@@ -3292,7 +3471,7 @@ async function acquireMediaStream(isVideo, user) {
       return stream;
     } catch (camErr) {
       console.warn("[WebRTC] Không thể mở webcam thực tế (có thể do đang mở ở tab khác trên cùng 1 máy tính):", camErr);
-      showToast("Webcam đang bận (trên cùng 1 máy tính). Hệ thống tự kích hoạt Camera Mô Phỏng để cuộc gọi tiếp tục!");
+      showToast("Webcam đang bận hoặc bị chặn. Hệ thống tự kích hoạt Camera Mô Phỏng để cuộc gọi tiếp tục!");
 
       // 2. Fall back to real mic + virtual video stream from canvas
       let audioTrack = null;
@@ -3301,6 +3480,7 @@ async function acquireMediaStream(isVideo, user) {
         audioTrack = audioStream.getAudioTracks()[0];
       } catch (micErr) {
         console.warn("[WebRTC] Mic cũng không truy cập được:", micErr);
+        audioTrack = createSilentAudioTrack();
       }
 
       const virtualStream = createVirtualVideoStream(user?.avatar_url, user?.display_name);
@@ -3317,8 +3497,13 @@ async function acquireMediaStream(isVideo, user) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (e) {
-      console.error("[WebRTC] Lỗi mic cho voice call:", e);
-      throw e;
+      console.warn("[WebRTC] Lỗi mic cho voice call, chuyển sang luồng mô phỏng:", e);
+      showToast("Không truy cập được Micro vật lý. Kích hoạt đàm thoại âm thanh ảo.");
+      const silentAudio = createSilentAudioTrack();
+      const virtualStream = createVirtualVideoStream(user?.avatar_url, user?.display_name);
+      const combinedTracks = [];
+      if (silentAudio) combinedTracks.push(silentAudio);
+      stream = new MediaStream(combinedTracks.length > 0 ? combinedTracks : virtualStream.getTracks());
     }
     return stream;
   }
@@ -3532,6 +3717,17 @@ function createPeerConnection() {
     });
   }
 
+  // Đảm bảo luôn có sẵn Transceiver hai chiều cho Audio và Video
+  try {
+    const transceivers = pc.getTransceivers();
+    const hasAudio = transceivers.some(t => t.receiver?.track?.kind === 'audio');
+    const hasVideo = transceivers.some(t => t.receiver?.track?.kind === 'video');
+    if (!hasAudio) pc.addTransceiver('audio', { direction: 'sendrecv' });
+    if (!hasVideo) pc.addTransceiver('video', { direction: 'sendrecv' });
+  } catch (te) {
+    console.warn("[WebRTC] addTransceiver:", te);
+  }
+
   pc.ontrack = (event) => {
     console.log("[WebRTC] Đã nhận remote stream track:", event.track.kind);
     const remoteVideo = document.getElementById('remoteVideo');
@@ -3545,9 +3741,15 @@ function createPeerConnection() {
         remoteVideo.srcObject.addTrack(event.track);
       }
 
-      remoteVideo.play().catch(e => console.warn("[WebRTC] Autoplay remoteVideo bị hạn chế:", e));
+      remoteVideo.onplay = () => {
+        if (avatarStage) avatarStage.style.display = 'none';
+        remoteVideo.style.display = 'block';
+      };
 
-      if (event.track.kind === 'video' && state.currentCallType === 'video' && !state.peerCamOff) {
+      remoteVideo.play().catch(e => console.warn("[WebRTC] Autoplay remoteVideo:", e));
+
+      if (event.track.kind === 'video') {
+        state.peerCamOff = false;
         remoteVideo.style.display = 'block';
         if (avatarStage) avatarStage.style.display = 'none';
       }
@@ -3671,6 +3873,37 @@ async function handleWebRTCSignalMessage(data) {
       if (avatarStage) avatarStage.style.display = 'none';
     }
     showToast(`Đối phương đã ${state.peerCamOff ? 'tắt' : 'bật'} camera.`);
+  } else if (action === 'screen_share_start') {
+    const remoteVideo = document.getElementById('remoteVideo');
+    const avatarStage = document.getElementById('callAvatarStage');
+    if (state.isSwappedVideo) {
+      toggleSwapVideo();
+    }
+    state.peerCamOff = false;
+    if (remoteVideo) {
+      remoteVideo.classList.add('screen-share');
+      remoteVideo.style.display = 'block';
+      remoteVideo.play().catch(e => {});
+    }
+    if (avatarStage) avatarStage.style.display = 'none';
+
+    showToast(`🖥️ ${data.sender_name || 'Đối phương'} đang chia sẻ toàn bộ màn hình.`);
+    if (!document.getElementById('remoteScreenSharePill')) {
+      const videoStage = document.getElementById('callVideoStage');
+      if (videoStage) {
+        const pill = document.createElement('div');
+        pill.id = 'remoteScreenSharePill';
+        pill.className = 'screen-share-indicator-pill';
+        pill.innerHTML = `<span class="pulse-dot"></span> Đang xem màn hình của ${escapeHtml(data.sender_name || 'đối phương')}`;
+        videoStage.appendChild(pill);
+      }
+    }
+  } else if (action === 'screen_share_stop') {
+    const remoteVideo = document.getElementById('remoteVideo');
+    const pill = document.getElementById('remoteScreenSharePill');
+    if (pill) pill.remove();
+    if (remoteVideo) remoteVideo.classList.remove('screen-share');
+    showToast("Đối phương đã dừng chia sẻ màn hình.");
   } else if (action === 'call_end') {
     showToast("Cuộc gọi đã kết thúc.");
     endWebRTCCall(false);
@@ -3738,14 +3971,64 @@ function toggleCallMic() {
   }
 }
 
-function toggleCallCam() {
+async function toggleCallCam() {
   state.isCamOff = !state.isCamOff;
 
-  // 1. Mute/unmute all local video tracks
-  if (state.localStream) {
-    state.localStream.getVideoTracks().forEach(track => {
-      track.enabled = !state.isCamOff;
-    });
+  // 1. Nếu mở lại camera mà localStream chưa có video track vật lý (hoặc đã bị giải phóng):
+  if (!state.isCamOff) {
+    let videoTrack = state.localStream ? state.localStream.getVideoTracks()[0] : null;
+
+    if (!videoTrack) {
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoTrack = camStream.getVideoTracks()[0];
+        if (state.localStream) {
+          state.localStream.addTrack(videoTrack);
+        } else {
+          state.localStream = camStream;
+        }
+      } catch (e) {
+        console.warn("Không thể kích hoạt webcam thực tế, kích hoạt camera mô phỏng:", e);
+        const virtualStream = createVirtualVideoStream(state.currentUser?.avatar_url, state.currentUser?.display_name);
+        videoTrack = virtualStream.getVideoTracks()[0];
+        if (state.localStream) {
+          state.localStream.addTrack(videoTrack);
+        } else {
+          state.localStream = virtualStream;
+        }
+      }
+    }
+
+    if (videoTrack) {
+      videoTrack.enabled = true;
+      if (state.peerConnection) {
+        const transceivers = state.peerConnection.getTransceivers ? state.peerConnection.getTransceivers() : [];
+        const videoTransceiver = transceivers.find(t => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video');
+        const videoSender = videoTransceiver ? videoTransceiver.sender : state.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+
+        if (videoSender) {
+          try {
+            await videoSender.replaceTrack(videoTrack);
+          } catch (rte) {
+            console.warn("replaceTrack error:", rte);
+          }
+        } else {
+          state.peerConnection.addTrack(videoTrack, state.localStream);
+        }
+      }
+    }
+
+    const localVideo = document.getElementById('localVideo');
+    if (localVideo) localVideo.srcObject = state.localStream;
+  } else {
+    // Tắt camera: disable all video tracks
+    if (state.localStream) {
+      state.localStream.getVideoTracks().forEach(track => {
+        track.enabled = false;
+      });
+    }
   }
 
   // 2. Mute/unmute all RTCRtpSender video tracks
@@ -3783,6 +4066,7 @@ function toggleCallCam() {
 function toggleSwapVideo() {
   const remoteVideo = document.getElementById('remoteVideo');
   const localVideo = document.getElementById('localVideo');
+  const avatarStage = document.getElementById('callAvatarStage');
   const labelText = document.getElementById('pipLabelText');
   if (!remoteVideo || !localVideo) return;
 
@@ -3794,8 +4078,19 @@ function toggleSwapVideo() {
   remoteVideo.play().catch(e => {});
   localVideo.play().catch(e => {});
 
-  if (labelText) {
-    labelText.innerText = state.isSwappedVideo ? (state.currentConversation?.title || "Đối phương") : "Bạn";
+  if (state.isSwappedVideo) {
+    if (labelText) labelText.innerText = state.currentConversation?.title || "Đối phương";
+    if (avatarStage) avatarStage.style.display = 'none';
+    remoteVideo.style.display = 'block';
+  } else {
+    if (labelText) labelText.innerText = "Bạn";
+    if (state.peerCamOff) {
+      remoteVideo.style.display = 'none';
+      if (avatarStage) avatarStage.style.display = 'flex';
+    } else {
+      remoteVideo.style.display = 'block';
+      if (avatarStage) avatarStage.style.display = 'none';
+    }
   }
 }
 
@@ -3936,6 +4231,13 @@ async function toggleScreenShare() {
       }
       if (localVideo) localVideo.srcObject = state.localStream;
     }
+
+    if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+      state.chatSocket.send(JSON.stringify({
+        type: 'webrtc_signal',
+        action: 'screen_share_stop'
+      }));
+    }
     showToast("Đã dừng chia sẻ màn hình.");
   } else {
     // Start screen sharing
@@ -3966,6 +4268,14 @@ async function toggleScreenShare() {
 
       state.isScreenSharing = true;
       if (btn) btn.classList.add('screen-share-active');
+
+      if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+        state.chatSocket.send(JSON.stringify({
+          type: 'webrtc_signal',
+          action: 'screen_share_start',
+          sender_name: state.currentUser?.display_name || 'Đối phương'
+        }));
+      }
 
       if (videoStage && !document.getElementById('screenShareIndicatorPill')) {
         const pill = document.createElement('div');
@@ -4665,6 +4975,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('activeCallModal').style.display = 'none';
   });
   document.getElementById('btnSwapVideo')?.addEventListener('click', toggleSwapVideo);
+  document.getElementById('localVideoPip')?.addEventListener('click', (e) => {
+    if (!e.target.closest('#btnSwapVideo')) toggleSwapVideo();
+  });
+  document.getElementById('remoteVideo')?.addEventListener('dblclick', toggleFullscreenCall);
   document.getElementById('btnToggleFullscreen')?.addEventListener('click', toggleFullscreenCall);
 
   // WebRTC Incoming Call Modal Controls
@@ -4701,6 +5015,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('networkLatencyBadge')?.addEventListener('click', openNetworkInspectorModal);
   document.getElementById('btnSendManualPing')?.addEventListener('click', sendManualPing);
   document.getElementById('btnClearNetLogs')?.addEventListener('click', clearNetworkLogs);
+
+  // Khôi phục Cấu hình IP và Port đã lưu
+  const savedIp = localStorage.getItem('zalo_server_ip') || window.location.hostname || '127.0.0.1';
+  const savedPort = localStorage.getItem('zalo_server_port') || window.location.port || '8000';
+  if (document.getElementById('authServerIp')) document.getElementById('authServerIp').value = savedIp;
+  if (document.getElementById('authServerPort')) document.getElementById('authServerPort').value = savedPort;
 });
 
 

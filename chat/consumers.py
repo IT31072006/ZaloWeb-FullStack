@@ -46,9 +46,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.user_display_name = await self.get_display_name(self.user)
         self.user_avatar = await self.get_avatar_url(self.user)
 
-        # Tham gia vào nhóm WebSocket của cuộc trò chuyện
+        # Tham gia vào nhóm WebSocket của cuộc trò chuyện và nhóm cá nhân người dùng
+        self.user_group_name = f"user_{self.user.id}"
         await self.channel_layer.group_add(
             self.room_group_name,
+            self.channel_name
+        )
+        await self.channel_layer.group_add(
+            self.user_group_name,
             self.channel_name
         )
 
@@ -86,6 +91,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self.room_group_name,
                 self.channel_name
             )
+            if hasattr(self, 'user_group_name'):
+                await self.channel_layer.group_discard(
+                    self.user_group_name,
+                    self.channel_name
+                )
 
     async def receive(self, text_data=None, bytes_data=None):
         if not text_data:
@@ -355,6 +365,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'display_name': event['display_name'],
             'avatar_url': event['avatar_url'],
             'last_read_message_id': event['last_read_message_id']
+        }))
+
+    async def broadcast_friend_event(self, event):
+        await self.send(text_data=json.dumps({
+            'type': event['event'],
+            'data': event.get('data') or {}
         }))
 
 

@@ -30,6 +30,8 @@ def format_time_ago(dt):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(source='user.id', read_only=True)
+    profile_id = serializers.IntegerField(source='id', read_only=True)
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
     avatar_url = serializers.SerializerMethodField()
@@ -38,7 +40,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = [
-            'id', 'username', 'email', 'display_name', 'avatar_url',
+            'id', 'profile_id', 'username', 'email', 'display_name', 'avatar_url',
             'phone', 'bio', 'gender', 'date_of_birth', 'is_online', 'last_seen'
         ]
 

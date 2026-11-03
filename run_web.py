@@ -44,19 +44,39 @@ else:
     except Exception as e:
         print(f"[!] Lỗi chuẩn bị cơ sở dữ liệu: {e}")
 
+def get_local_ip():
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 def main():
+    local_ip = get_local_ip()
     print("=" * 68)
     print("  🚀 ZALO WEB CLONE - DJANGO BACKEND & POSTGRESQL / SQLITE")
     print("  🎨 Giao diện Zalo Web chuẩn xác: Tin nhắn, Danh bạ, Giao việc, Cloud")
     print("  👥 Đăng ký, Đăng nhập, Hồ sơ, Đổi ảnh đại diện, Gửi ảnh & Voice Note")
+    print("  📞 Đàm thoại WebRTC P2P Real-time & Báo hiệu qua WebSocket ASGI")
     print("=" * 68)
-    print("  🌐 Địa chỉ Web: http://127.0.0.1:8000/")
-    print("  🛡️ Trang Quản trị Admin: http://127.0.0.1:8000/admin/ (admin / admin123)")
+    print(f"  🌐 Truy cập trên máy này:        http://127.0.0.1:8000/")
+    print(f"  📱 Truy cập từ máy khác (WiFi):  http://{local_ip}:8000/")
+    print(f"  🛡️ Trang Quản trị Admin:         http://127.0.0.1:8000/admin/ (admin / admin123)")
     print("  🔑 Tài khoản mẫu (Mật khẩu: 123456):")
-    print("     • quan (Phạm Huỳnh Quân)")
-    print("     • camnt (Cô Camnt - GV LTM)")
-    print("     • bao (Bảo)")
-    print("     • phuc (Nguyễn Hoàng Phúc)")
+    print("     • quan  (Phạm Huỳnh Quân - Máy 1)")
+    print("     • camnt (Cô Camnt        - Máy 2)")
+    print("     • bao   (Lê Phú Bảo)")
+    print("     • phuc  (Nguyễn Hoàng Phúc)")
+    print("=" * 68)
+    print("  💡 LƯU Ý KHI GỌI ĐIỆN GIỮA 2 MÁY KHÁC NHAU:")
+    print(f"     Trên máy 2 (máy khách), trình duyệt Chrome/Edge cần bật cờ để cấp quyền Micro/Cam:")
+    print(f"     1. Mở chrome://flags/#unsafely-treat-insecure-origin-as-secure")
+    print(f"     2. Nhập: http://{local_ip}:8000 -> Enabled -> Relaunch trình duyệt.")
+    print(f"     (Hoặc dùng Cloudflare Tunnel: 'cloudflared tunnel --url http://localhost:8000')")
     print("=" * 68)
 
     ensure_admin_and_port()
