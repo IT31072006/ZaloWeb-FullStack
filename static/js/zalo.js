@@ -185,6 +185,25 @@ function escapeHtml(text) {
     .replace(/'/g, "&#039;");
 }
 
+function makeInitialsAvatar(name) {
+  const clean = (name || 'U').trim();
+  const words = clean.split(/\s+/);
+  let initials = 'U';
+  if (words.length >= 2) {
+    initials = (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  } else if (clean.length >= 2) {
+    initials = clean.substring(0, 2).toUpperCase();
+  } else if (clean.length === 1) {
+    initials = clean.toUpperCase();
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#0068ff"/><text x="50%" y="54%" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#ffffff" dominant-baseline="middle" text-anchor="middle">${initials}</text></svg>`;
+  try {
+    return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+  } catch (e) {
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+}
+
 // Gentle Web Audio API Notification Sound
 function playNotificationSound() {
   if (!state.soundEnabled) return;
@@ -217,6 +236,10 @@ function playNotificationSound() {
 // ==============================================================================
 
 async function checkCurrentUser() {
+  if (window.location.pathname.includes('/auth')) {
+    // Đang ở màn hình đăng nhập/đăng ký thì không tải danh sách hội thoại
+    return;
+  }
   try {
     const res = await fetch('/api/me/');
     const data = await res.json();
@@ -225,8 +248,8 @@ async function checkCurrentUser() {
       updateUserUI();
       await loadConversations();
     } else {
-      // Auto login as default demo user 'quan' for seamless experience
-      await quickLogin('quan', false);
+      // Nếu chưa đăng nhập, chuyển hướng sang màn hình đăng nhập
+      window.location.href = '/auth/';
     }
   } catch (err) {
     console.error("Lỗi kiểm tra phiên đăng nhập:", err);
@@ -282,6 +305,10 @@ async function quickLogin(username, notify = true) {
     const data = await res.json();
     if (res.ok) {
       state.currentUser = data.user;
+      if (window.location.pathname.includes('/auth')) {
+        window.location.href = '/';
+        return;
+      }
       updateUserUI();
       closeModal('authModal');
       const popover = document.getElementById('userAccountPopover');
@@ -307,10 +334,10 @@ async function handleLogout() {
     state.currentConversationId = null;
     state.messages = [];
     if (state.syncTimer) clearInterval(state.syncTimer);
-    showToast("Đã đăng xuất tài khoản!");
-    openModal('authModal');
+    window.location.href = '/auth/';
   } catch (err) {
     console.error("Lỗi logout:", err);
+    window.location.href = '/auth/';
   }
 }
 
@@ -343,8 +370,25 @@ async function handleAuthSubmit() {
   const username = document.getElementById('authUsername')?.value.trim();
   const password = document.getElementById('authPassword')?.value.trim();
 
+  const alertBox = document.getElementById('authAlertBox');
+  function showAlert(msg, isSuccess = false) {
+    if (alertBox) {
+      alertBox.style.display = 'block';
+      alertBox.style.background = isSuccess ? '#e6f7ec' : '#fde8e8';
+      alertBox.style.color = isSuccess ? '#0d8a3a' : '#d32f2f';
+      alertBox.style.border = isSuccess ? '1px solid #b2e2be' : '1px solid #f8b4b4';
+      alertBox.innerText = msg;
+    }
+    showToast(msg);
+  }
+
   if (!username || !password) {
-    showToast("Vui lòng điền đầy đủ tên đăng nhập và mật khẩu!");
+    showAlert("Vui lòng điền đầy đủ tên đăng nhập và mật khẩu!");
+    return;
+  }
+
+  if (isRegister && password.length < 4) {
+    showAlert("Mật khẩu phải có ít nhất 4 ký tự!");
     return;
   }
 
@@ -352,16 +396,7 @@ async function handleAuthSubmit() {
   localStorage.setItem('zalo_server_ip', serverIp);
   localStorage.setItem('zalo_server_port', serverPort);
 
-  // Nếu người dùng nhập IP khác máy hiện tại (ví dụ kết nối mạng LAN tới máy bạn)
-  const currentHost = window.location.hostname;
-  const currentPort = window.location.port || '8000';
-  const isDifferentHost = (serverIp !== currentHost && serverIp !== 'localhost' && serverIp !== '127.0.0.1');
-  const isDifferentPort = (serverPort !== currentPort);
-
-  if (isDifferentHost || isDifferentPort) {
-    window.location.href = `${window.location.protocol}//${serverIp}:${serverPort}/`;
-    return;
-  }
+  const csrfToken = getCookie('csrftoken') || document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
 
   if (isRegister) {
     const displayName = document.getElementById('regDisplayName')?.value.trim() || username;
@@ -373,51 +408,53 @@ async function handleAuthSubmit() {
     formData.append('password', password);
     formData.append('display_name', displayName);
     formData.append('phone', phone);
-    if (avatarInput && avatarInput.files.length > 0) {
+    if (avatarInput && avatarInput.files && avatarInput.files.length > 0) {
       formData.append('avatar', avatarInput.files[0]);
     }
 
     try {
+      showAlert("Đang đăng ký tài khoản...", true);
       const res = await fetch('/api/register/', {
         method: 'POST',
-        headers: { 'X-CSRFToken': getCookie('csrftoken') },
+        headers: { 'X-CSRFToken': csrfToken },
         body: formData
       });
       const data = await res.json();
       if (res.ok) {
         state.currentUser = data.user;
-        updateUserUI();
-        closeModal('authModal');
-        showToast("Đăng ký tài khoản thành công!");
-        loadConversations();
+        showAlert("Đăng ký thành công! Đang chuyển hướng vào Zalo...", true);
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500);
       } else {
-        showToast(data.error || "Đăng ký thất bại!");
+        showAlert(data.error || "Đăng ký thất bại!");
       }
     } catch (err) {
-      showToast("Lỗi kết nối máy chủ khi đăng ký!");
+      showAlert("Lỗi kết nối máy chủ khi đăng ký: " + err.message);
     }
   } else {
     try {
+      showAlert("Đang đăng nhập...", true);
       const res = await fetch('/api/login/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRFToken': getCookie('csrftoken'),
+          'X-CSRFToken': csrfToken,
         },
         body: JSON.stringify({ username, password })
       });
       const data = await res.json();
       if (res.ok) {
         state.currentUser = data.user;
-        updateUserUI();
-        closeModal('authModal');
-        showToast(`Đăng nhập thành công: ${data.user.display_name}`);
-        loadConversations();
+        showAlert(`Đăng nhập thành công: ${data.user.display_name}! Đang vào Zalo...`, true);
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500);
       } else {
-        showToast(data.error || "Sai tên đăng nhập hoặc mật khẩu!");
+        showAlert(data.error || "Sai tên đăng nhập hoặc mật khẩu!");
       }
     } catch (err) {
-      showToast("Lỗi kết nối máy chủ khi đăng nhập!");
+      showAlert("Lỗi kết nối máy chủ khi đăng nhập: " + err.message);
     }
   }
 }
@@ -461,6 +498,7 @@ async function saveProfile() {
 
 async function loadConversations(searchQuery = '') {
   try {
+    state.currentSearchQuery = searchQuery;
     let url = '/api/conversations/';
     if (searchQuery) url += `?q=${encodeURIComponent(searchQuery)}`;
     const res = await fetch(url);
@@ -529,14 +567,54 @@ function renderConversationsList() {
       ? 'Bạn có thể chuyển các hội thoại từ người lạ hoặc ít quan trọng vào mục Khác.'
       : 'Vào mục <b>Danh bạ</b> hoặc tìm kiếm bạn bè để bắt đầu nhắn tin!';
 
+    let searchPromptHtml = '';
+    if (state.currentSearchQuery && state.currentSearchQuery.trim()) {
+      const qVal = state.currentSearchQuery.trim();
+      searchPromptHtml = `
+        <div class="conversation-item" style="background:#e8f2ff; border-left:3px solid #0068ff; cursor:pointer; text-align:left; margin-bottom:12px; padding:10px 12px; border-radius:6px;" onclick="openNewChatModalWithQuery('${escapeHtml(qVal)}')">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="background:#0068ff; color:#fff; width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px;">🔍</div>
+            <div>
+              <div style="color:#0068ff; font-weight:700; font-size:13.5px;">Tìm bạn: "${escapeHtml(qVal)}"</div>
+              <div style="color:#555; font-size:11.5px;">Bấm để tìm qua SĐT hoặc kết bạn mới</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     container.innerHTML = `
-      <div style="padding: 36px 16px; text-align: center; color: var(--zalo-text-muted); font-size: 13px;">
+      ${searchPromptHtml}
+      <div style="padding: 28px 16px; text-align: center; color: var(--zalo-text-muted); font-size: 13px;">
         <div style="font-size: 28px; margin-bottom: 8px;">${emptyIcon}</div>
         <div style="font-weight: 600; margin-bottom: 4px; color: var(--zalo-text-main);">${emptyTitle}</div>
         <div>${emptyDesc}</div>
       </div>
     `;
     return;
+  }
+
+  // Nếu đang tìm kiếm và có cuộc hội thoại, vẫn đưa gợi ý tìm kiếm người dùng mới lên đầu
+  if (state.currentSearchQuery && state.currentSearchQuery.trim()) {
+    const qVal = state.currentSearchQuery.trim();
+    const promptItem = document.createElement('div');
+    promptItem.className = 'conversation-item';
+    promptItem.style.background = '#e8f2ff';
+    promptItem.style.borderLeft = '3px solid #0068ff';
+    promptItem.style.cursor = 'pointer';
+    promptItem.style.padding = '10px 12px';
+    promptItem.style.marginBottom = '4px';
+    promptItem.innerHTML = `
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="background:#0068ff; color:#fff; width:38px; height:38px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px;">🔍</div>
+        <div>
+          <div style="color:#0068ff; font-weight:700; font-size:13.5px;">Tìm người dùng: "${escapeHtml(qVal)}"</div>
+          <div style="color:#555; font-size:11.5px;">Bấm để tìm qua SĐT hoặc kết bạn mới</div>
+        </div>
+      </div>
+    `;
+    promptItem.onclick = () => openNewChatModalWithQuery(qVal);
+    container.appendChild(promptItem);
   }
 
   list.forEach(conv => {
@@ -550,19 +628,30 @@ function renderConversationsList() {
     item.className = `conversation-item ${isActive ? 'active' : ''} ${isPinned ? 'is-pinned' : ''}`;
     item.onclick = () => selectConversation(conv.id);
 
-    const snippetText = conv.last_message ? conv.last_message.preview : 'Bắt đầu cuộc trò chuyện';
+    const convTitle = conv.title || conv.name || 'Hội thoại';
+    const fallbackAv = makeInitialsAvatar(convTitle);
+    const avUrl = conv.avatar_url || fallbackAv;
+
+    let snippetText = 'Bắt đầu cuộc trò chuyện';
+    if (conv.last_message) {
+      if (typeof conv.last_message === 'object') {
+        snippetText = conv.last_message.preview || conv.last_message.content || 'Tin nhắn mới';
+      } else {
+        snippetText = String(conv.last_message);
+      }
+    }
     const unreadHtml = conv.unread_count > 0 ? `<div class="unread-badge">${conv.unread_count}</div>` : '';
     const groupBadge = conv.is_group ? `<span class="group-badge-icon">👥</span>` : '';
 
     item.innerHTML = `
       <div class="item-avatar-wrapper">
-        <img src="${conv.avatar_url}" alt="Avatar">
+        <img src="${avUrl}" onerror="this.onerror=null; this.src='${fallbackAv}';" alt="">
         ${groupBadge}
       </div>
       <div class="item-details">
         <div class="item-top-row">
-          <div class="item-name" title="${escapeHtml(conv.title)}">${escapeHtml(conv.title)}${pinBadge}${muteBadge}</div>
-          <div class="item-time">${conv.time_label || ''}</div>
+          <div class="item-name" title="${escapeHtml(convTitle)}">${escapeHtml(convTitle)}${pinBadge}${muteBadge}</div>
+          <div class="item-time">${conv.time_label || conv.updated_at || ''}</div>
         </div>
         <div class="item-bottom-row">
           <div class="item-snippet" title="${escapeHtml(snippetText)}">${escapeHtml(snippetText)}</div>
@@ -584,28 +673,45 @@ async function selectConversation(convId) {
     const conv = await res.json();
     state.currentConversation = conv;
 
+    const convTitle = conv.title || conv.name || 'Hội thoại';
+    const fallbackAv = makeInitialsAvatar(convTitle);
+
     // Update Header
     const chatTitle = document.getElementById('currentChatTitle');
-    if (chatTitle) chatTitle.innerText = conv.title;
+    if (chatTitle) chatTitle.innerText = convTitle;
 
     const chatAvatar = document.getElementById('currentChatAvatar');
-    if (chatAvatar) chatAvatar.src = conv.avatar_url;
+    if (chatAvatar) {
+      chatAvatar.src = conv.avatar_url || fallbackAv;
+      chatAvatar.onerror = function() { this.onerror = null; this.src = fallbackAv; };
+      chatAvatar.alt = "";
+    }
 
     const chatSubtitle = document.getElementById('currentChatSubtitle');
     if (chatSubtitle) {
-      chatSubtitle.innerHTML = conv.is_group
-        ? `<span class="online-indicator"></span> ${conv.member_count} thành viên`
-        : `<span class="online-indicator"></span> Đang hoạt động`;
+      const e2eeBadge = `<span class="e2ee-badge" title="Mã hóa đầu cuối AES-256-GCM bảo vệ trên đường truyền Socket TCP" style="display:inline-flex; align-items:center; gap:2px; font-size:10.5px; margin-left:8px; color:#10b981; font-weight:600; background:rgba(16,185,129,0.1); padding:1px 6px; border-radius:10px;">🔒 E2EE</span>`;
+      chatSubtitle.innerHTML = (conv.is_group
+        ? `<span class="online-indicator"></span> ${conv.member_count || 2} thành viên`
+        : `<span class="online-indicator"></span> Đang hoạt động`) + e2eeBadge;
     }
 
     const chatInput = document.getElementById('chatInputText');
-    if (chatInput) chatInput.placeholder = `Nhập @, tin nhắn tới ${conv.title}`;
+    if (chatInput) chatInput.placeholder = `Nhập @, tin nhắn tới ${convTitle}`;
 
     // Update Pinned Message Banner
     updatePinnedMessageBanner(conv.pinned_message);
 
     // Update Cloud Storage Banner (My Cloud Drive View)
     const cloudBanner = document.getElementById('cloudStorageBanner');
+    if (cloudBanner) {
+      const isCloud = conv.is_cloud || convTitle.includes('Cloud');
+      if (isCloud) {
+        cloudBanner.style.display = 'flex';
+        loadCloudStorageMetrics();
+      } else {
+        cloudBanner.style.display = 'none';
+      }
+    }
     if (cloudBanner) {
       if (conv.is_cloud || conv.title === 'Cloud của tôi') {
         cloudBanner.style.display = 'flex';
@@ -1311,16 +1417,21 @@ function renderTimeline() {
       }
     }
 
+    const sName = msg.sender_name || msg.sender || 'Hệ thống';
+    const sFallback = makeInitialsAvatar(sName);
+    const sAvatar = msg.sender_avatar || sFallback;
+
     row.innerHTML = `
       ${actionsToolbarHtml}
-      <img class="msg-avatar" src="${msg.sender_avatar}" alt="${escapeHtml(msg.sender_name)}">
+      <img class="msg-avatar" src="${sAvatar}" onerror="this.onerror=null; this.src='${sFallback}';" alt="">
       <div class="msg-content-wrapper">
-        <span class="msg-sender-name">${escapeHtml(msg.sender_name)}</span>
+        <span class="msg-sender-name">${escapeHtml(sName)}</span>
         <div class="msg-bubble">
           ${quoteHtml}
           ${bodyHtml}
           <div class="msg-meta-row">
             <span>${msg.formatted_time || ''}</span>
+            ${msg.is_encrypted ? '<span title="Mã hóa đầu cuối E2EE (AES-256-GCM)" style="font-size:10px; margin-left:4px; opacity:0.85; cursor:help;">🔒</span>' : ''}
             ${statusHtml}
           </div>
         </div>
@@ -1482,6 +1593,17 @@ function updateTimelineReadStatuses() {
 async function toggleReaction(msgId, emoji) {
   if (!state.currentConversationId) return;
   triggerFloatingReaction(msgId, emoji);
+
+  // Gửi lập tức qua Socket TCP
+  if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    state.chatSocket.send(JSON.stringify({
+      type: 'REACTION',
+      message_id: msgId,
+      emoji: emoji,
+      conversation_id: state.currentConversationId
+    }));
+  }
+
   try {
     const res = await fetch(`/api/messages/${msgId}/react/`, {
       method: 'POST',
@@ -1489,17 +1611,15 @@ async function toggleReaction(msgId, emoji) {
         'Content-Type': 'application/json',
         'X-CSRFToken': getCookie('csrftoken'),
       },
-      body: JSON.stringify({ emoji: emoji })
+      body: JSON.stringify({ emoji: emoji, conversation_id: state.currentConversationId })
     });
     const data = await res.json();
-    if (res.ok) {
+    if (res.ok && data.reactions) {
       const msg = state.messages.find(m => m.id === msgId);
       if (msg) {
         msg.reactions = data.reactions;
         renderTimeline();
       }
-    } else {
-      showToast(data.error || 'Lỗi khi thả biểu cảm!');
     }
   } catch (err) {
     console.error("Lỗi thả cảm xúc:", err);
@@ -1510,13 +1630,24 @@ async function recallMessage(msgId) {
   if (!confirm("Bạn có chắc chắn muốn thu hồi tin nhắn này? Tin nhắn sẽ được thu hồi với tất cả thành viên trong cuộc trò chuyện.")) {
     return;
   }
+
+  // Gửi thông điệp thu hồi qua Socket TCP
+  if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    state.chatSocket.send(JSON.stringify({
+      type: 'RECALL',
+      message_id: msgId,
+      conversation_id: state.currentConversationId
+    }));
+  }
+
   try {
     const res = await fetch(`/api/messages/${msgId}/recall/`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-CSRFToken': getCookie('csrftoken'),
-      }
+      },
+      body: JSON.stringify({ conversation_id: state.currentConversationId })
     });
     const data = await res.json();
     if (res.ok) {
@@ -2512,6 +2643,18 @@ async function openNewChatModal() {
   loadUsersForNewChat();
 }
 
+async function openNewChatModalWithQuery(query) {
+  openModal('newChatModal');
+  const input = document.getElementById('friendSearchPhoneInput');
+  const clearBtn = document.getElementById('btnClearPhoneInput');
+  if (input) {
+    input.value = query;
+  }
+  if (clearBtn) clearBtn.style.display = 'block';
+  searchFriendByPhone(query);
+  loadUsersForNewChat(query);
+}
+
 async function loadUsersForNewChat(query = '') {
   const container = document.getElementById('newChatUsersList');
   if (!container) return;
@@ -3150,7 +3293,8 @@ function connectWebSocket(convId) {
   stopWebSocketPing();
 
   const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${wsProto}//${window.location.host}/ws/chat/${convId}/`;
+  const wsPort = window.WS_PORT || window.location.port;
+  const wsUrl = `${wsProto}//${window.location.hostname}:${wsPort}/ws/chat/${convId}/`;
 
   try {
     const socket = new WebSocket(wsUrl);
@@ -3290,8 +3434,51 @@ function handleWebSocketMessage(data) {
     playNotificationSound();
     loadConversations();
     loadContacts();
+  } else if (type === 'file_transfer_progress') {
+    showFileTransferProgress(data.file_name, data.progress, data.sent_bytes, data.total_bytes);
+  } else if (type === 'system_warning') {
+    showToast(data.message, 4000);
   } else if (type === 'webrtc_signal') {
     handleWebRTCSignalMessage(data);
+  }
+}
+
+function showFileTransferProgress(fileName, progress, sentBytes, totalBytes) {
+  let bar = document.getElementById('fileTransferProgressBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'fileTransferProgressBar';
+    bar.style.position = 'fixed';
+    bar.style.bottom = '80px';
+    bar.style.right = '24px';
+    bar.style.backgroundColor = 'var(--zalo-bg-panel, #ffffff)';
+    bar.style.color = 'var(--zalo-text-main, #333333)';
+    bar.style.border = '1px solid var(--zalo-border-light, #e0e0e0)';
+    bar.style.boxShadow = '0 6px 18px rgba(0,0,0,0.18)';
+    bar.style.borderRadius = '10px';
+    bar.style.padding = '12px 18px';
+    bar.style.zIndex = '9999';
+    bar.style.minWidth = '290px';
+    document.body.appendChild(bar);
+  }
+  bar.style.display = 'block';
+  bar.innerHTML = `
+    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px; font-weight:600;">
+      <span>📤 Phân mảnh 64KB & SHA-256</span>
+      <span style="color:#0068ff;">${progress}%</span>
+    </div>
+    <div style="font-size:11.5px; color:var(--zalo-text-muted); margin-bottom:6px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">
+      ${escapeHtml(fileName || 'Tệp tin')}
+    </div>
+    <div style="height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
+      <div style="height:100%; width:${progress}%; background:#0068ff; transition:width 0.15s ease;"></div>
+    </div>
+  `;
+  if (progress >= 100) {
+    setTimeout(() => {
+      if (bar) bar.style.display = 'none';
+      showToast(`✅ Đã truyền hoàn tất file '${escapeHtml(fileName || '')}' (SHA-256 OK)!`);
+    }, 1500);
   }
 }
 
@@ -3299,15 +3486,23 @@ function handleTypingInput() {
   if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) return;
   if (!state.isTypingSent) {
     state.isTypingSent = true;
-    state.chatSocket.send(JSON.stringify({ type: 'typing', is_typing: true }));
+    state.chatSocket.send(JSON.stringify({
+      type: 'TYPING',
+      conversation_id: state.currentConversationId,
+      is_typing: true
+    }));
   }
   if (state.typingTimer) clearTimeout(state.typingTimer);
   state.typingTimer = setTimeout(() => {
     state.isTypingSent = false;
     if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
-      state.chatSocket.send(JSON.stringify({ type: 'typing', is_typing: false }));
+      state.chatSocket.send(JSON.stringify({
+        type: 'TYPING',
+        conversation_id: state.currentConversationId,
+        is_typing: false
+      }));
     }
-  }, 2000);
+  }, 2200);
 }
 
 // --------------------------------------------------------------------------
@@ -4590,22 +4785,43 @@ function clearNetworkLogs() {
 // ==============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+  function updateThemeIcons(isDark) {
+    const sun = document.getElementById('railThemeIconSun');
+    const moon = document.getElementById('railThemeIconMoon');
+    if (sun && moon) {
+      sun.style.display = isDark ? 'block' : 'none';
+      moon.style.display = isDark ? 'none' : 'block';
+    }
+    const darkToggle = document.getElementById('toggleDarkMode');
+    if (darkToggle) darkToggle.checked = isDark;
+  }
+
   // Theme check
   const savedTheme = localStorage.getItem('zalo_dark_mode');
   if (savedTheme === 'true') {
     document.body.classList.add('dark-theme');
     state.darkMode = true;
-    const darkToggle = document.getElementById('toggleDarkMode');
-    if (darkToggle) darkToggle.checked = true;
+    updateThemeIcons(true);
+  } else {
+    updateThemeIcons(false);
   }
 
-  // Dark mode toggle listener
+  // 1-Click Dark Mode Toggle from Navigation Rail
+  document.getElementById('railThemeToggleBtn')?.addEventListener('click', () => {
+    state.darkMode = !state.darkMode;
+    document.body.classList.toggle('dark-theme', state.darkMode);
+    localStorage.setItem('zalo_dark_mode', state.darkMode ? 'true' : 'false');
+    updateThemeIcons(state.darkMode);
+  });
+
+  // Dark mode toggle listener (Inside Settings Modal)
   const darkToggle = document.getElementById('toggleDarkMode');
   if (darkToggle) {
     darkToggle.onchange = (e) => {
       state.darkMode = e.target.checked;
       document.body.classList.toggle('dark-theme', state.darkMode);
       localStorage.setItem('zalo_dark_mode', state.darkMode ? 'true' : 'false');
+      updateThemeIcons(state.darkMode);
     };
   }
 
@@ -4833,9 +5049,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Conversation Search input
-  document.getElementById('conversationSearchInput')?.addEventListener('input', (e) => {
-    loadConversations(e.target.value.trim());
-  });
+  const convSearchInput = document.getElementById('conversationSearchInput');
+  if (convSearchInput) {
+    convSearchInput.addEventListener('input', (e) => {
+      loadConversations(e.target.value.trim());
+    });
+    convSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = convSearchInput.value.trim();
+        if (val) {
+          openNewChatModalWithQuery(val);
+        }
+      }
+    });
+  }
 
   // Chat input Enter to send & Ctrl+V Paste Images
   const chatInput = document.getElementById('chatInputText');

@@ -9,10 +9,13 @@ test_chat.py - Script tự động kiểm thử (Integration Test) hệ thống 
 - Kiểm tra ngắt kết nối an toàn.
 """
 
+import os
+import sys
 import socket
 import threading
 import time
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import protocol
 from server import ChatServer
 

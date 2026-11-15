@@ -12,15 +12,16 @@ Kiến trúc:
 import base64
 import os
 import subprocess
+import socket
 import sys
 import webbrowser
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
 from PyQt6.QtGui import QFont, QColor, QIcon, QPixmap, QPainter, QBrush, QPen
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QListWidget, QListWidgetItem,
     QScrollArea, QFrame, QFileDialog, QMessageBox, QDialog,
-    QSplitter, QTextEdit, QSizePolicy
+    QSplitter, QTextEdit, QSizePolicy, QStackedWidget
 )
 
 import protocol
@@ -111,7 +112,7 @@ class SocketWorker(QThread):
 
 
 # ==============================================================================
-# 2. DIALOG ĐĂNG NHẬP (LOGIN DIALOG)
+# 2. DIALOG ĐĂNG NHẬP & ĐĂNG KÝ (LOGIN & REGISTER DIALOG)
 # ==============================================================================
 class LoginDialog(QDialog):
     def __init__(self, worker: SocketWorker, parent=None):
@@ -121,49 +122,58 @@ class LoginDialog(QDialog):
         self.conversations = []
         self.contacts = []
 
-        self.setWindowTitle("Đăng nhập Zalo Desktop - Socket TCP")
-        self.setFixedSize(420, 520)
+        self.setWindowTitle("Zalo Desktop - Đăng nhập & Đăng ký Socket TCP")
+        self.resize(500, 680)
+        self.setMinimumSize(480, 620)
         self.setStyleSheet("""
             QDialog {
-                background-color: #f0f4f9;
+                background-color: #f1f5f9;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial;
             }
             QLabel {
-                color: #1a202c;
+                color: #1e293b;
             }
             QLineEdit {
                 padding: 10px 14px;
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
                 background: #ffffff;
-                font-size: 14px;
+                font-size: 13.5px;
+                color: #0f172a;
             }
             QLineEdit:focus {
                 border: 2px solid #0068ff;
             }
-            QPushButton#btnLogin {
+            QPushButton#btnAction {
                 background-color: #0068ff;
                 color: white;
                 font-weight: bold;
                 font-size: 15px;
-                padding: 11px;
+                padding: 12px;
                 border-radius: 8px;
                 border: none;
             }
-            QPushButton#btnLogin:hover {
+            QPushButton#btnAction:hover {
                 background-color: #005ae0;
             }
             QPushButton.quick-btn {
                 background: #ffffff;
                 color: #0068ff;
                 border: 1px solid #bfdbfe;
-                border-radius: 6px;
-                padding: 6px 10px;
+                border-radius: 8px;
+                padding: 8px 12px;
                 font-size: 12px;
-                font-weight: 500;
+                font-weight: 600;
+                text-align: center;
             }
             QPushButton.quick-btn:hover {
-                background: #e0f2fe;
+                background: #eff6ff;
+                border-color: #0068ff;
+            }
+            QFrame#cardBox {
+                background-color: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
             }
         """)
 
@@ -171,34 +181,135 @@ class LoginDialog(QDialog):
         self.worker.sig_login_ack.connect(self.on_login_ack)
 
     def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(14)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(12)
 
-        # Header Title
-        title_box = QVBoxLayout()
-        title_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 1. HEADER (Logo + Title)
+        header_frame = QFrame()
+        header_box = QVBoxLayout(header_frame)
+        header_box.setContentsMargins(0, 0, 0, 4)
+        header_box.setSpacing(2)
+        header_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title_row = QHBoxLayout()
+        title_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_logo = QLabel("💬")
-        lbl_logo.setFont(QFont("Segoe UI Emoji", 36))
-        lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_box.addWidget(lbl_logo)
-
+        lbl_logo.setFont(QFont("Segoe UI Emoji", 26))
         lbl_app = QLabel("Zalo Desktop")
         lbl_app.setFont(QFont("Arial", 20, QFont.Weight.Bold))
-        lbl_app.setStyleSheet("color: #0068ff;")
-        lbl_app.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_box.addWidget(lbl_app)
+        lbl_app.setStyleSheet("color: #0068ff; margin-left: 6px;")
+        title_row.addWidget(lbl_logo)
+        title_row.addWidget(lbl_app)
+        header_box.addLayout(title_row)
 
         lbl_sub = QLabel("Môn Lập Trình Mạng (Socket TCP & WebRTC)")
         lbl_sub.setFont(QFont("Arial", 11))
         lbl_sub.setStyleSheet("color: #64748b;")
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_box.addWidget(lbl_sub)
-        layout.addLayout(title_box)
+        header_box.addWidget(lbl_sub)
 
-        layout.addSpacing(6)
+        main_layout.addWidget(header_frame)
 
-        # Host & Port row
+        # 2. TAB SWITCHER (ĐĂNG NHẬP / ĐĂNG KÝ)
+        tab_container = QFrame()
+        tab_layout = QHBoxLayout(tab_container)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.setSpacing(8)
+
+        self.btn_tab_login = QPushButton("Đăng nhập")
+        self.btn_tab_login.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tab_login.clicked.connect(lambda: self.switch_tab("login"))
+
+        self.btn_tab_register = QPushButton("Đăng ký mới")
+        self.btn_tab_register.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tab_register.clicked.connect(lambda: self.switch_tab("register"))
+
+        tab_layout.addWidget(self.btn_tab_login)
+        tab_layout.addWidget(self.btn_tab_register)
+        main_layout.addWidget(tab_container)
+
+        # 3. STACKED WIDGET
+        self.stack = QStackedWidget()
+        main_layout.addWidget(self.stack, 1)
+
+        # PAGE 0: LOGIN
+        page_login = self.create_login_page()
+        self.stack.addWidget(page_login)
+
+        # PAGE 1: REGISTER
+        page_register = self.create_register_page()
+        self.stack.addWidget(page_register)
+
+        # Set default active tab
+        self.switch_tab("login")
+
+    def switch_tab(self, tab: str):
+        if tab == "login":
+            self.stack.setCurrentIndex(0)
+            self.btn_tab_login.setStyleSheet("""
+                QPushButton {
+                    background: #ffffff;
+                    color: #0068ff;
+                    font-weight: bold;
+                    font-size: 13px;
+                    border: 1px solid #bfdbfe;
+                    border-bottom: 3px solid #0068ff;
+                    border-radius: 8px 8px 0 0;
+                    padding: 8px;
+                }
+            """)
+            self.btn_tab_register.setStyleSheet("""
+                QPushButton {
+                    background: #e2e8f0;
+                    color: #64748b;
+                    font-weight: 500;
+                    font-size: 13px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 8px 8px 0 0;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background: #cbd5e1;
+                }
+            """)
+        else:
+            self.stack.setCurrentIndex(1)
+            self.btn_tab_register.setStyleSheet("""
+                QPushButton {
+                    background: #ffffff;
+                    color: #0068ff;
+                    font-weight: bold;
+                    font-size: 13px;
+                    border: 1px solid #bfdbfe;
+                    border-bottom: 3px solid #0068ff;
+                    border-radius: 8px 8px 0 0;
+                    padding: 8px;
+                }
+            """)
+            self.btn_tab_login.setStyleSheet("""
+                QPushButton {
+                    background: #e2e8f0;
+                    color: #64748b;
+                    font-weight: 500;
+                    font-size: 13px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 8px 8px 0 0;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background: #cbd5e1;
+                }
+            """)
+
+    def create_login_page(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("cardBox")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Server IP & Port
         lbl_server = QLabel("Địa chỉ Máy chủ Socket TCP:")
         lbl_server.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         layout.addWidget(lbl_server)
@@ -209,25 +320,26 @@ class LoginDialog(QDialog):
         self.txt_port = QLineEdit(str(DEFAULT_PORT))
         self.txt_port.setFixedWidth(80)
         self.txt_port.setPlaceholderText("5555")
-        row_server.addWidget(self.txt_host)
+        row_server.addWidget(self.txt_host, 1)
         row_server.addWidget(self.txt_port)
         layout.addLayout(row_server)
 
         # Username
-        lbl_user = QLabel("Tài khoản (PostgreSQL):")
+        lbl_user = QLabel("Tên đăng nhập (PostgreSQL):")
         lbl_user.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         layout.addWidget(lbl_user)
-        self.txt_user = QLineEdit("quan")
-        self.txt_user.setPlaceholderText("Tên đăng nhập (quan, bao, camnt...)")
+        self.txt_user = QLineEdit("")
+        self.txt_user.setPlaceholderText("Nhập username (quan, bao, camnt...)")
         layout.addWidget(self.txt_user)
 
         # Password
         lbl_pass = QLabel("Mật khẩu:")
         lbl_pass.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         layout.addWidget(lbl_pass)
-        self.txt_pass = QLineEdit("password123")
+        self.txt_pass = QLineEdit("")
         self.txt_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        self.txt_pass.setPlaceholderText("Mật khẩu")
+        self.txt_pass.setPlaceholderText("Nhập mật khẩu (ví dụ: password123)")
+        self.txt_pass.returnPressed.connect(self.do_login)
         layout.addWidget(self.txt_pass)
 
         # Quick demo accounts
@@ -236,41 +348,136 @@ class LoginDialog(QDialog):
         lbl_quick.setStyleSheet("color: #64748b;")
         layout.addWidget(lbl_quick)
 
-        quick_box = QHBoxLayout()
-        btn_q1 = QPushButton("Quân Phạm (quan)")
+        quick_grid = QGridLayout()
+        quick_grid.setSpacing(8)
+        btn_q1 = QPushButton("👤  Quân (@quan)")
         btn_q1.setProperty("class", "quick-btn")
-        btn_q1.clicked.connect(lambda: self.fill_account("quan", "password123"))
+        btn_q1.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_q1.clicked.connect(lambda: self.fill_account("quan", "123456"))
 
-        btn_q2 = QPushButton("Lê Phú Bảo (bao)")
+        btn_q2 = QPushButton("👤  Bảo (@bao)")
         btn_q2.setProperty("class", "quick-btn")
-        btn_q2.clicked.connect(lambda: self.fill_account("bao", "password123"))
+        btn_q2.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_q2.clicked.connect(lambda: self.fill_account("bao", "123456"))
 
-        btn_q3 = QPushButton("Cô Camnt (camnt)")
+        btn_q3 = QPushButton("👩‍🏫  Cô Camnt (@camnt)")
         btn_q3.setProperty("class", "quick-btn")
-        btn_q3.clicked.connect(lambda: self.fill_account("camnt", "password123"))
+        btn_q3.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_q3.clicked.connect(lambda: self.fill_account("camnt", "123456"))
 
-        quick_box.addWidget(btn_q1)
-        quick_box.addWidget(btn_q2)
-        quick_box.addWidget(btn_q3)
-        layout.addLayout(quick_box)
+        btn_q4 = QPushButton("👤  Phúc (@phuc)")
+        btn_q4.setProperty("class", "quick-btn")
+        btn_q4.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_q4.clicked.connect(lambda: self.fill_account("phuc", "123456"))
+
+        quick_grid.addWidget(btn_q1, 0, 0)
+        quick_grid.addWidget(btn_q2, 0, 1)
+        quick_grid.addWidget(btn_q3, 1, 0)
+        quick_grid.addWidget(btn_q4, 1, 1)
+        layout.addLayout(quick_grid)
 
         self.lbl_status = QLabel("")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setWordWrap(True)
         self.lbl_status.setStyleSheet("color: #dc2626; font-size: 12px;")
         layout.addWidget(self.lbl_status)
 
+        layout.addStretch()
+
         # Button Login
         self.btn_login = QPushButton("Đăng nhập Socket TCP")
-        self.btn_login.setObjectName("btnLogin")
+        self.btn_login.setObjectName("btnAction")
+        self.btn_login.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_login.clicked.connect(self.do_login)
         layout.addWidget(self.btn_login)
+
+        return card
+
+    def create_register_page(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("cardBox")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        # Server IP & Port
+        lbl_server = QLabel("Địa chỉ Máy chủ Socket TCP:")
+        lbl_server.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        layout.addWidget(lbl_server)
+
+        row_server = QHBoxLayout()
+        self.txt_reg_host = QLineEdit(DEFAULT_HOST)
+        self.txt_reg_host.setPlaceholderText("IP Server (127.0.0.1)")
+        self.txt_reg_port = QLineEdit(str(DEFAULT_PORT))
+        self.txt_reg_port.setFixedWidth(80)
+        self.txt_reg_port.setPlaceholderText("5555")
+        row_server.addWidget(self.txt_reg_host, 1)
+        row_server.addWidget(self.txt_reg_port)
+        layout.addLayout(row_server)
+
+        # Username
+        lbl_user = QLabel("Tên đăng nhập mới (*):")
+        lbl_user.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        layout.addWidget(lbl_user)
+        self.txt_reg_user = QLineEdit("")
+        self.txt_reg_user.setPlaceholderText("Ví dụ: hoangphuc, sinhvien_ltm...")
+        layout.addWidget(self.txt_reg_user)
+
+        # Password
+        lbl_pass = QLabel("Mật khẩu (*):")
+        lbl_pass.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        layout.addWidget(lbl_pass)
+        self.txt_reg_pass = QLineEdit("")
+        self.txt_reg_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        self.txt_reg_pass.setPlaceholderText("Nhập mật khẩu")
+        layout.addWidget(self.txt_reg_pass)
+
+        # Display name & Phone
+        row_extra = QHBoxLayout()
+        vbox_name = QVBoxLayout()
+        lbl_name = QLabel("Họ và tên hiển thị:")
+        lbl_name.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.txt_reg_name = QLineEdit("")
+        self.txt_reg_name.setPlaceholderText("Nguyễn Hoàng Phúc")
+        vbox_name.addWidget(lbl_name)
+        vbox_name.addWidget(self.txt_reg_name)
+
+        vbox_phone = QVBoxLayout()
+        lbl_phone = QLabel("Số điện thoại:")
+        lbl_phone.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.txt_reg_phone = QLineEdit("")
+        self.txt_reg_phone.setPlaceholderText("0912345678")
+        vbox_phone.addWidget(lbl_phone)
+        vbox_phone.addWidget(self.txt_reg_phone)
+
+        row_extra.addLayout(vbox_name, 1)
+        row_extra.addLayout(vbox_phone, 1)
+        layout.addLayout(row_extra)
+
+        self.lbl_reg_status = QLabel("")
+        self.lbl_reg_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_reg_status.setWordWrap(True)
+        self.lbl_reg_status.setStyleSheet("color: #dc2626; font-size: 12px;")
+        layout.addWidget(self.lbl_reg_status)
+
+        layout.addStretch()
+
+        # Button Register
+        self.btn_register = QPushButton("Tạo tài khoản mới")
+        self.btn_register.setObjectName("btnAction")
+        self.btn_register.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_register.clicked.connect(self.do_register)
+        layout.addWidget(self.btn_register)
+
+        return card
 
     def fill_account(self, u, p):
         self.txt_user.setText(u)
         self.txt_pass.setText(p)
+        self.lbl_status.setText("")
 
     def do_login(self):
-        host = self.txt_host.text().strip()
+        host = self.txt_host.text().strip() or "127.0.0.1"
         port = int(self.txt_port.text().strip() or "5555")
         user = self.txt_user.text().strip()
         pwd = self.txt_pass.text().strip()
@@ -301,6 +508,56 @@ class LoginDialog(QDialog):
             "password": pwd,
         }
         self.worker.send_packet(packet)
+
+    def do_register(self):
+        host = self.txt_reg_host.text().strip() or "127.0.0.1"
+        port = int(self.txt_reg_port.text().strip() or "5555")
+        user = self.txt_reg_user.text().strip()
+        pwd = self.txt_reg_pass.text().strip()
+        name = self.txt_reg_name.text().strip() or user
+        phone = self.txt_reg_phone.text().strip()
+
+        if not user or not pwd:
+            self.lbl_reg_status.setStyleSheet("color: #dc2626; font-size: 12px;")
+            self.lbl_reg_status.setText("Vui lòng nhập đầy đủ Tên đăng nhập và Mật khẩu!")
+            return
+
+        self.lbl_reg_status.setStyleSheet("color: #0068ff; font-size: 12px;")
+        self.lbl_reg_status.setText("Đang đăng ký tài khoản trên máy chủ...")
+        self.btn_register.setEnabled(False)
+
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(4.0)
+            s.connect((host, port))
+            pkt = {
+                "type": protocol.MSG_TYPE_REGISTER,
+                "username": user,
+                "password": pwd,
+                "display_name": name,
+                "phone": phone
+            }
+            protocol.send_packet(s, pkt)
+            resp = protocol.recv_packet(s)
+            s.close()
+
+            self.btn_register.setEnabled(True)
+            if resp and resp.get("status") == "OK":
+                self.txt_user.setText(user)
+                self.txt_pass.setText(pwd)
+                self.txt_host.setText(host)
+                self.txt_port.setText(str(port))
+                self.switch_tab("login")
+                self.lbl_status.setStyleSheet("color: #16a34a; font-size: 12px; font-weight: bold;")
+                self.lbl_status.setText(f"✅ Đăng ký thành công! Hãy bấm 'Đăng nhập' với nick '{user}'")
+            else:
+                err = resp.get("message") if resp else "Máy chủ không phản hồi!"
+                self.lbl_reg_status.setStyleSheet("color: #dc2626; font-size: 12px;")
+                self.lbl_reg_status.setText(f"❌ {err}")
+        except Exception as e:
+            self.btn_register.setEnabled(True)
+            self.lbl_reg_status.setStyleSheet("color: #dc2626; font-size: 12px;")
+            self.lbl_reg_status.setText(f"❌ Lỗi kết nối: {e}")
 
     def on_login_ack(self, data: dict):
         self.btn_login.setEnabled(True)
@@ -952,9 +1209,27 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    worker = SocketWorker(DEFAULT_HOST, DEFAULT_PORT)
+    server_host = DEFAULT_HOST
+    server_port = DEFAULT_PORT
+
+    args = sys.argv[1:]
+    if len(args) >= 1:
+        first = args[0].strip()
+        if "." in first or first.isalpha():
+            server_host = first
+            if len(args) >= 2 and args[1].isdigit():
+                server_port = int(args[1])
+        elif first.isdigit():
+            server_port = int(first)
+
+    worker = SocketWorker(server_host, server_port)
 
     login_dlg = LoginDialog(worker)
+    login_dlg.txt_host.setText(server_host)
+    login_dlg.txt_port.setText(str(server_port))
+    login_dlg.txt_reg_host.setText(server_host)
+    login_dlg.txt_reg_port.setText(str(server_port))
+
     if login_dlg.exec() == QDialog.DialogCode.Accepted:
         win = ZaloDesktopWindow(worker, login_dlg.user_data, login_dlg.conversations, login_dlg.contacts)
         win.show()

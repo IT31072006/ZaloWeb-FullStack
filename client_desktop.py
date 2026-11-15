@@ -1,77 +1,1063 @@
 #!/usr/bin/env python3
 """
-client_desktop.py - Ứng dụng Zalo Desktop (Zalo PC Native Window).
-Đồ án Lập trình Mạng - SV: Phạm Huỳnh Quân & Lê Phú Bảo.
+client_desktop.py / client.py - Ứng dụng Zalo Desktop kết nối Máy chủ TCP Socket.
+Đồ án môn Lập trình Mạng (LTM) - SV: Phạm Huỳnh Quân (24IT220) & Lê Phú Bảo (24IT018).
 
-Chạy toàn bộ Giao diện Zalo Web pixel-perfect dưới dạng một CỬA SỔ PHẦN MỀM DESKTOP độc lập:
-- Hoàn toàn KHÔNG CÓ thanh URL, KHÔNG CÓ tab trình duyệt, KHÔNG CÓ nút back/forward.
-- Giữ nguyên 100% đồ họa siêu đẹp: Dark Mode, Bong bóng chat, Emojis, Thả tim, Voice note sóng âm, To-do, Cloud.
-- Tích hợp cuộc gọi WebRTC P2P Video Call mở Camera trực tiếp.
-- Dữ liệu đồng bộ bền vững với CSDL PostgreSQL.
+Kiến trúc Hệ thống:
+1. Tầng Mạng (Network): 100% kết nối qua TCP Socket thuần (AF_INET, SOCK_STREAM) tới server.py:5555.
+2. Giao thức Mạng: Length-Prefixed Framing (protocol.py - 4 byte header + JSON payload).
+3. Giao diện: Cửa sổ Desktop Zalo PC Native siêu đẹp (Dark Mode, Bong bóng chat, Emojis, Gửi file, Tìm kiếm).
+4. Mô hình Client - Server:
+   - Máy 1 (Server): python3 server.py (hoặc python3 server_gui.py)
+   - Máy 1 (Client): python3 client_desktop.py
+   - Máy 2 (Client): python3 client_desktop.py <IP_MÁY_1>
 """
 
+import base64
+import datetime
+import email
+import hashlib
+import html
+import http.server
+import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
+import urllib.parse
+import uuid
 
-TARGET_URL = "http://127.0.0.1:8000"
+from websockets.sync.server import serve as ws_serve
+
+import protocol
+
+DEFAULT_SERVER_HOST = "127.0.0.1"
+DEFAULT_SERVER_PORT = 5555
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def is_port_open(host="127.0.0.1", port=8000):
+def is_port_open(host="127.0.0.1", port=5555, timeout=1.0):
     try:
-        with socket.create_connection((host, int(port)), timeout=0.5):
+        with socket.create_connection((host, int(port)), timeout=timeout):
             return True
     except Exception:
         return False
 
 
-def ensure_backend_running():
-    """Kiểm tra và tự động khởi động Server ngầm nếu chưa chạy."""
-    if is_port_open("127.0.0.1", 8000):
-        return
+def get_free_port(start_port=48080):
+    for p in range(start_port, start_port + 100):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", p))
+                return p
+        except OSError:
+            continue
+    return 48080
 
-    print("[*] Phát hiện Server chưa chạy. Đang tự động bật Máy chủ Zalo...")
-    # Bật Daphne ASGI Server (:8000)
-    subprocess.Popen([
-        sys.executable, "-m", "daphne", "-b", "0.0.0.0", "-p", "8000", "zalo_project.asgi:application"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # Bật TCP Socket Server (:5555) nếu chưa chạy
-    if not is_port_open("127.0.0.1", 5555):
-        subprocess.Popen([sys.executable, "server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ==============================================================================
+# BỘ CẦU NỐI TCP SOCKET CLIENT (LOCAL BRIDGE TO TCP SOCKET SERVER)
+# ==============================================================================
+class ZaloTCPClient:
+    def __init__(self, server_host=DEFAULT_SERVER_HOST, server_port=DEFAULT_SERVER_PORT):
+        self.server_host = server_host
+        self.server_port = int(server_port)
+        self.tcp_sock: socket.socket | None = None
+        self.is_connected = False
+        self.lock = threading.Lock()
 
-    # Đợi máy chủ sẵn sàng
-    for _ in range(25):
-        time.sleep(0.3)
-        if is_port_open("127.0.0.1", 8000):
-            print("✅ Máy chủ Zalo đã sẵn sàng!")
+        # Dữ liệu phiên đăng nhập & Tự phục hồi phiên
+        self.current_user = None
+        self.conversations = []
+        self.contacts = []
+        self.messages_cache = {}  # {conv_id: [messages]}
+        self.saved_credentials: tuple[str, str] | None = None
+        self.should_stop = False
+        self.is_reconnecting = False
+        self.last_pong_time = time.time()
+        self.heartbeat_started = False
+
+        # Chờ phản hồi đồng bộ từ Server cho Request-Response
+        self.pending_responses = {}  # {type: threading.Event()}
+        self.response_payloads = {}
+
+        # Danh sách WebSocket clients cục bộ (giao diện UI trên máy này)
+        self.local_ws_clients = set()
+        self.ws_lock = threading.Lock()
+
+    def connect(self) -> bool:
+        """Mở kết nối TCP Socket tới Server trên cổng 5555."""
+        try:
+            print(f"[*] Đang kết nối TCP Socket tới Máy chủ {self.server_host}:{self.server_port}...")
+            self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp_sock.connect((self.server_host, self.server_port))
+            self.is_connected = True
+            print(f"✅ Đã kết nối thành công tới TCP Socket Server ({self.server_host}:{self.server_port})!")
+
+            # Luồng nhận gói tin TCP ngầm từ Server
+            t = threading.Thread(target=self._recv_loop, daemon=True)
+            t.start()
+
+            # Luồng nhịp tim (Keep-Alive Heartbeat Ping/Pong)
+            if not self.heartbeat_started:
+                self.heartbeat_started = True
+                threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+
+            return True
+        except Exception as e:
+            print(f"❌ Không thể kết nối tới TCP Socket Server ({self.server_host}:{self.server_port}): {e}")
+            self.is_connected = False
+            return False
+
+    def disconnect(self):
+        """Đóng kết nối an toàn với socket shutdown."""
+        self.is_connected = False
+        if self.tcp_sock:
+            try:
+                self.tcp_sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                self.tcp_sock.close()
+            except Exception:
+                pass
+
+    def send_tcp_packet(self, packet: dict) -> bool:
+        if not self.tcp_sock or not self.is_connected:
+            return False
+        with self.lock:
+            return protocol.send_packet(self.tcp_sock, packet)
+
+    def send_and_wait(self, packet: dict, expect_type: str, timeout=5.0) -> dict | None:
+        """Gửi gói tin TCP và đợi phản hồi từ Server."""
+        evt = threading.Event()
+        self.pending_responses[expect_type] = evt
+        success = self.send_tcp_packet(packet)
+        if not success:
+            self.pending_responses.pop(expect_type, None)
+            return None
+
+        finished = evt.wait(timeout=timeout)
+        self.pending_responses.pop(expect_type, None)
+        if finished:
+            return self.response_payloads.pop(expect_type, None)
+        return None
+
+    def _heartbeat_loop(self):
+        """Luồng phát nhịp tim (Keep-Alive Ping/Pong) định kỳ 4.5s để đo RTT và giữ kết nối TCP."""
+        while not self.should_stop:
+            time.sleep(4.5)
+            if self.is_connected and self.tcp_sock:
+                try:
+                    ping_pkt = {
+                        "type": protocol.MSG_TYPE_PING,
+                        "client_timestamp": int(time.time() * 1000)
+                    }
+                    self.send_tcp_packet(ping_pkt)
+                except Exception:
+                    pass
+
+    def _auto_reconnect_loop(self):
+        """Cơ chế Tự động kết nối lại (Auto-Reconnect) khi rớt mạng hoặc khởi động lại Server."""
+        self._broadcast_to_ui({
+            "type": "system_warning",
+            "message": "⚠️ Đã mất kết nối tới máy chủ Socket :5555. Đang tự động kết nối lại..."
+        })
+        attempts = 0
+        while not self.is_connected and not self.should_stop:
+            attempts += 1
+            time.sleep(2.5)
+            print(f"[*] [Tầng Mạng Auto-Reconnect] Thử kết nối lại TCP (lần #{attempts}) tới {self.server_host}:{self.server_port}...")
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((self.server_host, self.server_port))
+                self.tcp_sock = s
+                self.is_connected = True
+                self.is_reconnecting = False
+                print(f"✅ [Tầng Mạng] Đã kết nối lại TCP Socket Server thành công!")
+
+                # Khởi động lại luồng nhận
+                threading.Thread(target=self._recv_loop, daemon=True).start()
+
+                # Tái đăng nhập tự động phục hồi phiên làm việc
+                if self.saved_credentials:
+                    u, p = self.saved_credentials
+                    login_pkt = {"type": protocol.MSG_TYPE_LOGIN, "username": u, "password": p}
+                    ack = self.send_and_wait(login_pkt, protocol.MSG_TYPE_LOGIN_ACK, timeout=5.0)
+                    if ack and ack.get("status") == "OK":
+                        print(f"✅ [Tầng Mạng] Đã tự động tái xác thực người dùng '{u}' qua TCP Socket!")
+
+                self._broadcast_to_ui({
+                    "type": "system_warning",
+                    "message": "✅ Đã khôi phục kết nối thành công tới máy chủ Socket!"
+                })
+                break
+            except Exception:
+                pass
+        self.is_reconnecting = False
+
+    def _recv_loop(self):
+        """Vòng lặp nhận dữ liệu từ TCP Socket Server."""
+        while self.is_connected and self.tcp_sock:
+            try:
+                packet = protocol.recv_packet(self.tcp_sock)
+                if not packet:
+                    break
+
+                p_type = packet.get("type")
+
+                # Tự động đánh thức bất kỳ request đồng bộ nào đang chờ phản hồi (send_and_wait)
+                if p_type in self.pending_responses:
+                    self.response_payloads[p_type] = packet
+                    self.pending_responses[p_type].set()
+
+                # 1. Gói tin phản hồi LOGIN_ACK
+                if p_type == protocol.MSG_TYPE_LOGIN_ACK:
+                    if packet.get("status") == "OK":
+                        self.current_user = packet.get("user")
+                        self.conversations = packet.get("conversations", [])
+                        self.contacts = packet.get("contacts", [])
+
+                # 2. Gói tin phản hồi REGISTER_ACK
+                elif p_type == protocol.MSG_TYPE_REGISTER_ACK:
+                    pass
+
+                # 3. Gói tin phản hồi HISTORY_ACK (Giải mã E2EE AES-256-GCM cho tin nhắn cũ)
+                elif p_type == protocol.MSG_TYPE_HISTORY_ACK:
+                    conv_id = packet.get("conversation_id")
+                    msgs = packet.get("messages", [])
+                    for m in msgs:
+                        raw_c = m.get("content", "")
+                        if raw_c.startswith("[ENC:AES-256-GCM]"):
+                            m["is_encrypted"] = True
+                            cipher_str = raw_c[len("[ENC:AES-256-GCM]"):]
+                            m["content"] = protocol.decrypt_payload(cipher_str)
+                        elif m.get("is_encrypted"):
+                            m["content"] = protocol.decrypt_payload(raw_c)
+
+                    if conv_id is not None:
+                        self.messages_cache[conv_id] = msgs
+                    if p_type in self.pending_responses:
+                        self.response_payloads[p_type] = packet
+                        self.pending_responses[p_type].set()
+
+                # 4. Gói tin Chat mới từ Server (Broadcast tới UI kèm giải mã E2EE)
+                elif p_type in (protocol.MSG_TYPE_CHAT, protocol.MSG_TYPE_FILE, protocol.MSG_TYPE_PRIVATE):
+                    conv_id = packet.get("conversation_id")
+                    raw_content = packet.get("content", "")
+                    is_enc = packet.get("is_encrypted", False) or raw_content.startswith("[ENC:AES-256-GCM]")
+
+                    if raw_content.startswith("[ENC:AES-256-GCM]"):
+                        cipher_str = raw_content[len("[ENC:AES-256-GCM]"):]
+                        display_content = protocol.decrypt_payload(cipher_str)
+                        print(f"🔒 [E2EE AES-256-GCM] Đã giải mã tin nhắn: Cipher={cipher_str[:20]}... -> Plaintext='{display_content}'")
+                    elif is_enc:
+                        display_content = protocol.decrypt_payload(raw_content)
+                    else:
+                        display_content = raw_content
+
+                    # Cập nhật xem trước trong danh sách hội thoại
+                    txt = display_content or f"[{packet.get('file_name', 'Tệp tin')}]"
+                    found = False
+                    for c in self.conversations:
+                        if c.get("id") == conv_id:
+                            c["last_message"] = {
+                                "preview": txt[:60],
+                                "type": packet.get("message_type", "text"),
+                                "time_ago": packet.get("timestamp", ""),
+                            }
+                            c["time_label"] = packet.get("timestamp", "")
+                            found = True
+                            break
+
+                    # Nếu là cuộc hội thoại mới bắt đầu nhắn tin, tự động đưa vào danh sách Ưu tiên
+                    if not found and conv_id:
+                        s_name = packet.get("sender_name") or packet.get("sender", "Hội thoại")
+                        self.conversations.insert(0, {
+                            "id": conv_id,
+                            "title": s_name,
+                            "name": s_name,
+                            "is_group": False,
+                            "other_username": packet.get("sender", ""),
+                            "avatar_url": packet.get("sender_avatar", ""),
+                            "last_message": {
+                                "preview": txt[:60],
+                                "type": packet.get("message_type", "text"),
+                                "time_ago": packet.get("timestamp", ""),
+                            },
+                            "time_label": packet.get("timestamp", ""),
+                            "unread_count": 0,
+                            "is_priority": True,
+                        })
+
+                    ui_msg = {
+                        "id": packet.get("message_id") or packet.get("id") or int(time.time()),
+                        "conversation_id": conv_id,
+                        "sender_id": 0,
+                        "sender_name": packet.get("sender_name") or packet.get("sender", "Bạn"),
+                        "sender_avatar": packet.get("sender_avatar") or "",
+                        "is_me": (packet.get("sender") == (self.current_user.get("username") if self.current_user else "")),
+                        "message_type": packet.get("message_type") or ("image" if packet.get("is_image") else ("file" if p_type == protocol.MSG_TYPE_FILE else "text")),
+                        "content": display_content,
+                        "is_encrypted": is_enc,
+                        "attachment_url": packet.get("attachment_url", ""),
+                        "attachment_name": packet.get("file_name", ""),
+                        "attachment_size": packet.get("file_size_str", ""),
+                        "formatted_time": packet.get("timestamp", ""),
+                        "created_at": datetime.datetime.now().isoformat(),
+                        "is_recalled": False,
+                        "reactions": [],
+                    }
+                    if conv_id in self.messages_cache:
+                        self.messages_cache[conv_id].append(ui_msg)
+
+                    ui_event = {
+                        "type": "chat_message",
+                        "message": ui_msg
+                    }
+                    self._broadcast_to_ui(ui_event)
+                    self._broadcast_to_ui(packet)
+
+                # 5. Gói tin Đang soạn tin nhắn (Typing Indicator)
+                elif p_type in (protocol.MSG_TYPE_TYPING, "typing"):
+                    self._broadcast_to_ui(packet)
+
+                # 6. Gói tin Thả biểu cảm cảm xúc (Reactions)
+                elif p_type in (protocol.MSG_TYPE_REACTION, "reaction_update"):
+                    conv_id = packet.get("conversation_id")
+                    msg_id = packet.get("message_id")
+                    if conv_id in self.messages_cache:
+                        for m in self.messages_cache[conv_id]:
+                            if m.get("id") == msg_id:
+                                m["reactions"] = packet.get("reactions", [])
+                                break
+                    self._broadcast_to_ui(packet)
+
+                # 7. Gói tin Thu hồi tin nhắn (Message Recalled)
+                elif p_type in (protocol.MSG_TYPE_RECALL, "message_recalled"):
+                    conv_id = packet.get("conversation_id")
+                    msg_id = packet.get("message_id")
+                    if conv_id in self.messages_cache:
+                        for m in self.messages_cache[conv_id]:
+                            if m.get("id") == msg_id:
+                                m["is_recalled"] = True
+                                m["content"] = "Tin nhắn đã được thu hồi"
+                                break
+                    self._broadcast_to_ui(packet)
+
+                # 8. Gói tin Nhịp tim Pong (Phản hồi Heartbeat Ping)
+                elif p_type in (protocol.MSG_TYPE_PONG, "pong"):
+                    self.last_pong_time = time.time()
+                    self._broadcast_to_ui({
+                        "type": "pong",
+                        "client_timestamp": packet.get("client_timestamp")
+                    })
+
+                # 8.1 Gói tin sự kiện Lời mời kết bạn thời gian thực
+                elif p_type in ("friend_request_received", "friend_request_accepted"):
+                    self._broadcast_to_ui(packet)
+
+                # 9. Gói tin danh sách người dùng online
+                elif p_type == protocol.MSG_TYPE_USER_LIST:
+                    online_users = packet.get("users", [])
+                    for contact in self.contacts:
+                        contact["is_online"] = contact.get("username") in online_users
+                    self._broadcast_to_ui(packet)
+
+                # 10. Gói tin thông báo hệ thống / Call Signaling
+                elif p_type in (protocol.MSG_TYPE_SYSTEM, protocol.MSG_TYPE_CALL_REQ, protocol.MSG_TYPE_CALL_RESP, protocol.MSG_TYPE_CALL_END):
+                    self._broadcast_to_ui(packet)
+
+            except Exception as e:
+                break
+
+        self.is_connected = False
+        print("[!] Đã ngắt kết nối với TCP Socket Server.")
+        if not self.should_stop and not self.is_reconnecting:
+            self.is_reconnecting = True
+            threading.Thread(target=self._auto_reconnect_loop, daemon=True).start()
+
+    def _broadcast_to_ui(self, packet: dict):
+        """Chuyển tiếp gói tin nhận được từ TCP Socket tới giao diện UI cục bộ."""
+        payload_str = json.dumps(packet)
+        with self.ws_lock:
+            disconnected = []
+            for ws in self.local_ws_clients:
+                try:
+                    ws.send(payload_str)
+                except Exception:
+                    disconnected.append(ws)
+            for ws in disconnected:
+                self.local_ws_clients.remove(ws)
+
+
+# ==============================================================================
+# MÁY CHỦ GIAO DIỆN CỤC BỘ (LOCAL HTTP ADAPTER ON 127.0.0.1)
+# ==============================================================================
+class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
+    client_bridge: ZaloTCPClient = None
+    ws_port: int = 48081
+
+    def log_message(self, format, *args):
+        pass  # Tắt log HTTP nội bộ để console luôn sạch đẹp
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+
+        # 1. Trang Đăng nhập & Đăng ký
+        if path == "/auth/" or path == "/auth":
+            self.serve_html_file("templates/auth.html")
             return
 
-    print("⚠️ Cảnh báo: Server đang khởi động...")
+        # 2. Trang Chat chính
+        elif path == "/" or path == "/index.html":
+            self.serve_html_file("templates/index.html")
+            return
 
+        # 3. Phục vụ tài nguyên tĩnh (Static CSS, JS, Images, Icons)
+        elif path.startswith("/static/"):
+            rel_path = path[len("/static/"):]
+            file_path = os.path.join(BASE_DIR, "static", rel_path)
+            self.serve_static_file(file_path)
+            return
 
-def launch_zalo_desktop():
-    print("=" * 70)
-    print("🚀 KHỞI ĐỘNG ZALO DESKTOP APPLICATION (NATIVE WINDOW)")
-    print("=" * 70)
+        # 4. Phục vụ tệp tải lên (Media Uploads / Avatars / Files)
+        elif path.startswith("/media/"):
+            rel_path = path[len("/media/"):]
+            file_path = os.path.join(BASE_DIR, "media", rel_path)
+            self.serve_static_file(file_path)
+            return
 
-    # Tự động đảm bảo Server luôn hoạt động trước khi mở cửa sổ Desktop
-    ensure_backend_running()
+        # 5. API Kiểm tra phiên đăng nhập hiện tại
+        elif path == "/api/me/":
+            user = self.client_bridge.current_user
+            data = {"authenticated": bool(user), "user": user}
+            self.send_json(data)
+            return
 
-    # 1. Chế độ Application Mode độc lập (Native Desktop Window không dính vào trình duyệt đang mở)
-    chrome_bin = "/usr/bin/google-chrome"
-    profile_num = sys.argv[1] if len(sys.argv) > 1 else "1"
-    profile_dir = os.path.expanduser(f"~/.config/zalo_desktop_profile_{profile_num}")
-    os.makedirs(profile_dir, exist_ok=True)
+        # 6. API Danh sách Hội thoại
+        elif path == "/api/conversations/":
+            cleaned = []
+            for c in self.client_bridge.conversations:
+                item = dict(c)
+                title = item.get("title") or item.get("name") or "Hội thoại"
+                item["title"] = title
+                item["name"] = title
+                if not isinstance(item.get("last_message"), dict):
+                    item["last_message"] = {
+                        "preview": str(item.get("last_message") or "Bắt đầu cuộc trò chuyện"),
+                        "type": "text"
+                    }
+                cleaned.append(item)
+            self.send_json(cleaned)
+            return
 
-    if os.path.exists(chrome_bin):
+        # 7. API Lấy thông tin 1 Hội thoại
+        elif path.startswith("/api/conversations/") and not path.endswith("/messages/"):
+            parts = [p for p in path.split("/") if p]
+            if len(parts) >= 3 and parts[2].isdigit():
+                conv_id = int(parts[2])
+                conv = next((c for c in self.client_bridge.conversations if c.get("id") == conv_id), None)
+                if conv:
+                    c_copy = dict(conv)
+                    c_title = c_copy.get("title") or c_copy.get("name") or "Hội thoại"
+                    c_copy["title"] = c_title
+                    c_copy["name"] = c_title
+                    if "members" not in c_copy:
+                        curr_u = self.client_bridge.current_user or {}
+                        c_copy["members"] = [
+                            {
+                                "id": 1,
+                                "username": curr_u.get("username", "user"),
+                                "display_name": curr_u.get("display_name", "Tôi"),
+                                "avatar_url": curr_u.get("avatar_url", ""),
+                                "role": "admin",
+                                "is_online": True,
+                            }
+                        ]
+                    self.send_json(c_copy)
+                    return
+            self.send_json({"error": "Không tìm thấy hội thoại"}, status=404)
+            return
+
+        # 8. API Lịch sử tin nhắn một cuộc trò chuyện (Truy vấn qua TCP Socket)
+        elif path.startswith("/api/conversations/") and path.endswith("/messages/"):
+            parts = [p for p in path.split("/") if p]
+            if len(parts) >= 4 and parts[2].isdigit():
+                conv_id = int(parts[2])
+                # Gửi gói tin LOAD_HISTORY qua TCP Socket tới server.py:5555
+                pkt = {"type": protocol.MSG_TYPE_LOAD_HISTORY, "conversation_id": conv_id}
+                ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_HISTORY_ACK, timeout=4.0)
+                msgs = ack.get("messages", []) if ack else self.client_bridge.messages_cache.get(conv_id, [])
+                self.send_json(msgs)
+                return
+            self.send_json([])
+            return
+
+        # 8.1 API Tìm kiếm người dùng bằng Số điện thoại (Zalo Web Search by Phone)
+        elif path == "/api/users/search_by_phone/":
+            phone_val = query.get("phone", [""])[0].strip()
+            pkt = {
+                "type": protocol.MSG_TYPE_SEARCH_USER,
+                "phone": phone_val,
+                "query": phone_val,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_SEARCH_USER_ACK, timeout=5.0)
+            if ack:
+                self.send_json(ack)
+            else:
+                self.send_json({"status": "not_found", "message": "Không tìm thấy người dùng"}, status=404)
+            return
+
+        # 8.2 API Tìm kiếm người dùng tổng quát
+        elif path == "/api/users/search/":
+            q_val = query.get("q", [""])[0].strip()
+            pkt = {
+                "type": protocol.MSG_TYPE_SEARCH_USER,
+                "query": q_val,
+                "phone": q_val,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_SEARCH_USER_ACK, timeout=5.0)
+            if ack and ack.get("users"):
+                self.send_json(ack.get("users"))
+            elif ack and ack.get("status") == "found" and ack.get("user"):
+                self.send_json([ack.get("user")])
+            else:
+                self.send_json([])
+            return
+
+        # 8.3 API Lời mời kết bạn đang chờ (Incoming Friend Requests)
+        elif path == "/api/friends/requests/":
+            pkt = {"type": protocol.MSG_TYPE_LOAD_CONTACTS}
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CONTACTS_ACK, timeout=4.0)
+            reqs = ack.get("friend_requests", []) if ack else []
+            self.send_json(reqs)
+            return
+
+        # 9. API Danh bạ bạn bè
+        elif path in ("/api/contacts/", "/api/friends/"):
+            pkt = {"type": protocol.MSG_TYPE_LOAD_CONTACTS}
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CONTACTS_ACK, timeout=4.0)
+            contacts = ack.get("contacts", []) if ack else self.client_bridge.contacts
+            self.send_json(contacts)
+            return
+
+        # 10. API To-do / Tasks & Cloud
+        elif path in ("/api/tasks/", "/api/cloud/"):
+            self.send_json([])
+            return
+
+        # Fallback file không tìm thấy
+        self.send_error(404, "Not Found")
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        # 1. API Đăng nhập (Chuyển tiếp qua TCP Socket LOGIN)
+        if path == "/api/login/":
+            body = self.read_json_body()
+            username = body.get("username", "").strip()
+            password = body.get("password", "").strip()
+
+            pkt = {
+                "type": protocol.MSG_TYPE_LOGIN,
+                "username": username,
+                "password": password,
+            }
+            # Gửi gói tin TCP tới server.py:5555
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_LOGIN_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.client_bridge.saved_credentials = (username, password)
+                self.send_json({
+                    "message": "Đăng nhập TCP thành công!",
+                    "user": self.client_bridge.current_user
+                })
+            else:
+                err = ack.get("message") if ack else "Máy chủ TCP không phản hồi!"
+                self.send_json({"error": err}, status=401)
+            return
+
+        # 2. API Đăng ký tài khoản mới (Chuyển tiếp qua TCP Socket REGISTER)
+        elif path == "/api/register/":
+            # Hỗ trợ cả Multipart FormData và JSON
+            ctype = self.headers.get("Content-Type", "")
+            username = ""
+            password = ""
+            display_name = ""
+            phone = ""
+
+            if "application/json" in ctype:
+                body = self.read_json_body()
+                username = body.get("username", "").strip()
+                password = body.get("password", "").strip()
+                display_name = body.get("display_name", "").strip()
+                phone = body.get("phone", "").strip()
+            else:
+                # FormData
+                fields, _ = self.parse_form_data()
+                username = fields.get("username", "").strip()
+                password = fields.get("password", "").strip()
+                display_name = fields.get("display_name", "").strip()
+                phone = fields.get("phone", "").strip()
+
+            pkt = {
+                "type": protocol.MSG_TYPE_REGISTER,
+                "username": username,
+                "password": password,
+                "display_name": display_name or username,
+                "phone": phone
+            }
+            # Gửi gói tin TCP tới server.py:5555
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_REGISTER_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.client_bridge.saved_credentials = (username, password)
+                # Tự động đăng nhập sau khi đăng ký
+                login_pkt = {"type": protocol.MSG_TYPE_LOGIN, "username": username, "password": password}
+                login_ack = self.client_bridge.send_and_wait(login_pkt, protocol.MSG_TYPE_LOGIN_ACK, timeout=4.0)
+                user = self.client_bridge.current_user or {"username": username, "display_name": display_name or username}
+                self.send_json({"message": "Đăng ký thành công!", "user": user}, status=201)
+            else:
+                err = ack.get("message") if ack else "Máy chủ TCP không phản hồi!"
+                self.send_json({"error": err}, status=400)
+            return
+
+        # 3. API Đăng xuất
+        elif path == "/api/logout/":
+            self.client_bridge.current_user = None
+            self.client_bridge.saved_credentials = None
+            self.send_json({"message": "Đã đăng xuất"})
+            return
+
+        # 4. API Gửi tin nhắn văn bản hoặc tệp tin (Mã hóa E2EE AES-256-GCM hoặc Phân mảnh File 64KB)
+        elif path.startswith("/api/conversations/") and path.endswith("/send/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 4 and parts[2].isdigit()) else None
+
+            ctype = self.headers.get("Content-Type", "")
+            if "multipart/form-data" in ctype:
+                fields, files = self.parse_form_data()
+                mtype = fields.get("type", "text")
+                content = fields.get("content", "")
+
+                if "file" in files and files["file"]["filename"]:
+                    file_item = files["file"]
+                    fname = file_item["filename"]
+                    fdata = file_item["data"]
+                    is_img = fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+                    sha256_hash = hashlib.sha256(fdata).hexdigest()
+
+                    # Phân mảnh 64KB nếu kích thước lớn
+                    if len(fdata) > protocol.CHUNK_SIZE:
+                        transfer_id = f"xfer_{uuid.uuid4().hex[:8]}"
+                        total_chunks = (len(fdata) + protocol.CHUNK_SIZE - 1) // protocol.CHUNK_SIZE
+
+                        # Gói mở đầu FILE_START
+                        self.client_bridge.send_tcp_packet({
+                            "type": protocol.MSG_TYPE_FILE_START,
+                            "transfer_id": transfer_id,
+                            "conversation_id": conv_id,
+                            "file_name": fname,
+                            "file_size": len(fdata),
+                            "total_chunks": total_chunks,
+                            "sha256": sha256_hash,
+                            "is_image": is_img
+                        })
+
+                        def send_chunks_worker():
+                            for idx in range(total_chunks):
+                                c_bytes = fdata[idx * protocol.CHUNK_SIZE : (idx + 1) * protocol.CHUNK_SIZE]
+                                self.client_bridge.send_tcp_packet({
+                                    "type": protocol.MSG_TYPE_FILE_CHUNK,
+                                    "transfer_id": transfer_id,
+                                    "chunk_index": idx,
+                                    "total_chunks": total_chunks,
+                                    "chunk_data": base64.b64encode(c_bytes).decode("utf-8")
+                                })
+                                pct = int((idx + 1) / total_chunks * 100)
+                                self.client_bridge._broadcast_to_ui({
+                                    "type": "file_transfer_progress",
+                                    "transfer_id": transfer_id,
+                                    "file_name": fname,
+                                    "progress": pct,
+                                    "sent_bytes": min((idx + 1) * protocol.CHUNK_SIZE, len(fdata)),
+                                    "total_bytes": len(fdata)
+                                })
+                                time.sleep(0.005)
+
+                            # Gói kết thúc FILE_COMPLETE
+                            self.client_bridge.send_tcp_packet({
+                                "type": protocol.MSG_TYPE_FILE_COMPLETE,
+                                "transfer_id": transfer_id,
+                                "conversation_id": conv_id,
+                                "file_name": fname,
+                                "file_size": len(fdata),
+                                "sha256": sha256_hash,
+                                "is_image": is_img
+                            })
+
+                        threading.Thread(target=send_chunks_worker, daemon=True).start()
+                    else:
+                        # File nhỏ gửi trực tiếp kèm mã băm SHA-256
+                        b64_data = base64.b64encode(fdata).decode("utf-8")
+                        pkt = {
+                            "type": protocol.MSG_TYPE_FILE,
+                            "conversation_id": conv_id,
+                            "file_name": fname,
+                            "file_size": len(fdata),
+                            "file_data": b64_data,
+                            "is_image": is_img,
+                            "sha256": sha256_hash,
+                        }
+                        self.client_bridge.send_tcp_packet(pkt)
+                else:
+                    # Mã hóa đầu cuối (E2EE) bằng AES-256-GCM trước khi truyền qua Socket TCP
+                    enc_text = protocol.encrypt_payload(content)
+                    pkt = {
+                        "type": protocol.MSG_TYPE_CHAT,
+                        "conversation_id": conv_id,
+                        "content": f"[ENC:AES-256-GCM]{enc_text}",
+                        "is_encrypted": True,
+                        "cipher_algo": "AES-256-GCM"
+                    }
+                    self.client_bridge.send_tcp_packet(pkt)
+            else:
+                body = self.read_json_body()
+                content = body.get("content", "")
+                enc_text = protocol.encrypt_payload(content)
+                pkt = {
+                    "type": protocol.MSG_TYPE_CHAT,
+                    "conversation_id": conv_id,
+                    "content": f"[ENC:AES-256-GCM]{enc_text}",
+                    "is_encrypted": True,
+                    "cipher_algo": "AES-256-GCM"
+                }
+                self.client_bridge.send_tcp_packet(pkt)
+
+            self.send_json({"status": "OK", "message": "Đã gửi qua TCP Socket"})
+            return
+
+        # 5. API Thả biểu cảm cảm xúc (Chuyển tiếp qua TCP Socket REACTION)
+        elif path.startswith("/api/messages/") and path.endswith("/react/"):
+            parts = [p for p in path.split("/") if p]
+            msg_id = int(parts[2]) if (len(parts) >= 4 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            emoji = body.get("emoji", "").strip()
+            conv_id = body.get("conversation_id")
+            if msg_id and emoji:
+                pkt = {
+                    "type": protocol.MSG_TYPE_REACTION,
+                    "message_id": msg_id,
+                    "emoji": emoji,
+                    "conversation_id": conv_id,
+                }
+                self.client_bridge.send_tcp_packet(pkt)
+            self.send_json({"status": "OK"})
+            return
+
+        # 6. API Thu hồi tin nhắn (Chuyển tiếp qua TCP Socket RECALL)
+        elif path.startswith("/api/messages/") and path.endswith("/recall/"):
+            parts = [p for p in path.split("/") if p]
+            msg_id = int(parts[2]) if (len(parts) >= 4 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            conv_id = body.get("conversation_id")
+            if msg_id:
+                pkt = {
+                    "type": protocol.MSG_TYPE_RECALL,
+                    "message_id": msg_id,
+                    "conversation_id": conv_id,
+                }
+                self.client_bridge.send_tcp_packet(pkt)
+            self.send_json({"status": "OK"})
+            return
+
+        # 7. API Tạo hội thoại 1-1 mới (Chuyển tiếp qua TCP Socket CREATE_CONV)
+        elif path == "/api/conversations/create/":
+            body = self.read_json_body()
+            target_user_id = body.get("user_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_CREATE_CONV,
+                "target_user_id": target_user_id,
+                "is_group": False,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CREATE_CONV_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                conv = ack.get("conversation", {})
+                if not any(c.get("id") == conv.get("id") for c in self.client_bridge.conversations):
+                    self.client_bridge.conversations.insert(0, conv)
+                self.send_json(conv, status=201)
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Lỗi tạo hội thoại"}, status=400)
+            return
+
+        # 8. API Gửi lời mời kết bạn (Chuyển tiếp qua TCP Socket FRIEND_REQ)
+        elif path == "/api/friends/request/":
+            body = self.read_json_body()
+            target_user_id = body.get("user_id") or body.get("target_user_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_FRIEND_REQ,
+                "target_user_id": target_user_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_FRIEND_REQ_ACK, timeout=5.0)
+            if ack:
+                self.send_json(ack)
+            else:
+                self.send_json({"status": "error", "message": "Máy chủ TCP không phản hồi"}, status=500)
+            return
+
+        # 9. API Phản hồi lời mời kết bạn Đồng ý / Từ chối (Chuyển tiếp qua TCP Socket FRIEND_RESP)
+        elif path == "/api/friends/respond/":
+            body = self.read_json_body()
+            request_id = body.get("request_id")
+            action = body.get("action", "accept")
+            pkt = {
+                "type": protocol.MSG_TYPE_FRIEND_RESP,
+                "request_id": request_id,
+                "action": action,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_FRIEND_RESP_ACK, timeout=5.0)
+            if ack:
+                self.send_json(ack)
+            else:
+                self.send_json({"status": "error", "message": "Máy chủ TCP không phản hồi"}, status=500)
+            return
+
+        self.send_json({"status": "OK"})
+
+    def parse_form_data(self):
+        """Đọc và giải mã form data (URL-encoded hoặc Multipart) thay cho module cgi ở Python 3.13+."""
+        ctype = self.headers.get("Content-Type", "")
+        clen = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(clen) if clen > 0 else b""
+        fields = {}
+        files = {}
+        if "multipart/form-data" in ctype:
+            raw_msg = f"Content-Type: {ctype}\r\n\r\n".encode("latin1", errors="replace") + raw_body
+            msg = email.message_from_bytes(raw_msg)
+            if msg.is_multipart():
+                for part in msg.get_payload():
+                    name = part.get_param("name", header="content-disposition")
+                    filename = part.get_filename()
+                    if filename:
+                        files[name] = {
+                            "filename": filename,
+                            "data": part.get_payload(decode=True) or b"",
+                        }
+                    elif name:
+                        payload = part.get_payload(decode=True)
+                        fields[name] = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        else:
+            try:
+                parsed = urllib.parse.parse_qs(raw_body.decode("utf-8", errors="replace"))
+                for k, v in parsed.items():
+                    fields[k] = v[0] if v else ""
+            except Exception:
+                pass
+        return fields, files
+
+    def read_json_body(self) -> dict:
         try:
-            print("[*] Đang mở Cửa sổ Desktop Zalo PC (Native App Window)...")
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length).decode("utf-8")
+            return json.loads(raw)
+        except Exception:
+            return {}
+
+    def send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_html_file(self, rel_path: str):
+        full_path = os.path.join(BASE_DIR, rel_path)
+        if not os.path.exists(full_path):
+            self.send_error(404, "File not found")
+            return
+
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Thay thế các cú pháp Django template để chạy thuần trên máy khách
+        content = content.replace("{% load static %}", "")
+        content = content.replace("{% static '", "/static/")
+        content = content.replace("{% static \"", "/static/")
+        content = content.replace("' %}", "")
+        content = content.replace("\" %}", "")
+        content = content.replace("{% csrf_token %}", "<input type='hidden' name='csrfmiddlewaretoken' value='tcp_client_token'>")
+
+        # Tiêm cổng WebSocket nội bộ vào trang để JS tự động kết nối
+        ws_inject = f"<script>window.WS_PORT = {self.ws_port};</script>"
+        content = content.replace("</head>", f"{ws_inject}\n</head>")
+
+        body = content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_static_file(self, file_path: str):
+        if not os.path.exists(file_path) or os.path.isdir(file_path):
+            self.send_error(404, "Static file not found")
+            return
+
+        # Xác định MIME type
+        ctype = "application/octet-stream"
+        if file_path.endswith(".css"):
+            ctype = "text/css; charset=utf-8"
+        elif file_path.endswith(".js"):
+            ctype = "application/javascript; charset=utf-8"
+        elif file_path.endswith(".png"):
+            ctype = "image/png"
+        elif file_path.endswith(".jpg") or file_path.endswith(".jpeg"):
+            ctype = "image/jpeg"
+        elif file_path.endswith(".svg"):
+            ctype = "image/svg+xml"
+        elif file_path.endswith(".ico"):
+            ctype = "image/x-icon"
+        elif file_path.endswith(".mp3"):
+            ctype = "audio/mpeg"
+
+        with open(file_path, "rb") as f:
+            data = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+
+# ==============================================================================
+# HÀM KHỞI CHẠY CLIENT DESKTOP
+# ==============================================================================
+def find_chromium_browser():
+    candidates = [
+        # Linux
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/brave-browser",
+        "/usr/bin/microsoft-edge",
+        # Windows
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+        # macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    for name in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "msedge", "brave"]:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def main():
+    server_host = DEFAULT_SERVER_HOST
+    server_port = DEFAULT_SERVER_PORT
+    profile_num = "1"
+
+    args = sys.argv[1:]
+    if len(args) >= 1:
+        first = args[0].strip()
+        if "." in first or first.isalpha():
+            server_host = first
+            profile_num = args[1].strip() if len(args) >= 2 else "2"
+        elif first.isdigit():
+            profile_num = first
+            if len(args) >= 2:
+                server_host = args[1].strip()
+
+    print("=" * 70)
+    print("🚀 KHỞI ĐỘNG ZALO DESKTOP CLIENT (100% TCP SOCKET :5555)")
+    print("=" * 70)
+    print(f"  📡 Máy chủ Socket TCP: {server_host}:{server_port}")
+    print(f"  👤 Profile người dùng: {profile_num}")
+    print("=" * 70)
+
+    # 1. Mở kết nối TCP Socket tới Server :5555
+    bridge = ZaloTCPClient(server_host, server_port)
+    connected = bridge.connect()
+    if not connected:
+        print("\n" + "!" * 70)
+        print(f"❌ LỖI: Không thể kết nối tới Máy chủ TCP Socket ({server_host}:{server_port})!")
+        print("👉 Vui lòng mở Terminal và khởi động Máy chủ trước:")
+        print("   python3 server.py")
+        print("!" * 70 + "\n")
+        return
+
+    # 2. Khởi tạo Local WebSocket Server (để đẩy dữ liệu TCP nhận được vào UI)
+    ws_port = get_free_port(48100)
+    def ws_handler(websocket):
+        with bridge.ws_lock:
+            bridge.local_ws_clients.add(websocket)
+        try:
+            for message in websocket:
+                try:
+                    data = json.loads(message)
+                    bridge.send_tcp_packet(data)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            with bridge.ws_lock:
+                bridge.local_ws_clients.discard(websocket)
+
+    def run_ws():
+        with ws_serve(ws_handler, "127.0.0.1", ws_port) as server:
+            server.serve_forever()
+
+    threading.Thread(target=run_ws, daemon=True).start()
+
+    # 3. Khởi tạo Local HTTP Server (phục vụ giao diện Zalo PC cục bộ)
+    http_port = get_free_port(48000)
+    LocalUIRequestHandler.client_bridge = bridge
+    LocalUIRequestHandler.ws_port = ws_port
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", http_port), LocalUIRequestHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    target_url = f"http://127.0.0.1:{http_port}/auth/?logout=1"
+
+    # 4. Mở cửa sổ Ứng dụng Desktop Zalo PC Native
+    browser_bin = find_chromium_browser()
+    if browser_bin:
+        profile_dir = os.path.expanduser(f"~/.config/zalo_desktop_profile_{profile_num}")
+        os.makedirs(profile_dir, exist_ok=True)
+        # Dọn dẹp lock cũ nếu có
+        for lk in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
+            try:
+                os.remove(os.path.join(profile_dir, lk))
+            except Exception:
+                pass
+
+        try:
+            print(f"[*] Mở cửa sổ Zalo PC qua {os.path.basename(browser_bin)} (App Mode)...")
             cmd = [
-                chrome_bin,
-                f"--app={TARGET_URL}",
+                browser_bin,
+                f"--app={target_url}",
                 f"--user-data-dir={profile_dir}",
                 "--window-size=1260,840",
                 "--window-position=80,40",
@@ -80,33 +1066,58 @@ def launch_zalo_desktop():
                 "--autoplay-policy=no-user-gesture-required",
                 "--no-first-run",
                 "--no-default-browser-check",
+                "--disable-features=Translate,OptimizationHints,MediaRouter",
+                "--disable-background-networking",
+                "--disable-sync",
             ]
-            subprocess.run(cmd)
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            t_start = time.time()
+            proc.wait()
+            # Nếu tiến trình thoát quá sớm (do Chrome chuyển sang session có sẵn), giữ bridge chạy để duy trì socket
+            if time.time() - t_start < 2.0:
+                print("[*] Cửa sổ Zalo PC đang mở trên màn hình...")
+                while bridge.is_connected:
+                    time.sleep(1)
+            bridge.is_connected = False
+            return
+        except KeyboardInterrupt:
+            print("\n[*] Đang đóng Zalo Desktop Client...")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            bridge.is_connected = False
             return
         except Exception as e:
-            print(f"[!] Lỗi khởi chạy Chrome App Mode: {e}")
+            print(f"[!] Lỗi mở App Mode: {e}")
 
-    # 2. Phương án dự phòng qua PyWebView
+    # Fallback qua PyWebView
     try:
         import webview
-        print("[*] Khởi tạo cửa sổ Desktop qua PyWebView Engine...")
+        print("[*] Mở cửa sổ Desktop qua PyWebView...")
         window = webview.create_window(
-            title="Zalo PC - Hệ thống Chat Room & WebRTC Video Call (Lập trình Mạng)",
-            url=TARGET_URL,
+            title=f"Zalo PC - Socket TCP 5555 ({server_host})",
+            url=target_url,
             width=1240,
             height=820,
             resizable=True
         )
         webview.start()
+        bridge.is_connected = False
         return
     except Exception as e:
         print(f"[!] Lỗi PyWebView: {e}")
 
-    # 3. Fallback cuối cùng: Trình duyệt mặc định
+    # Fallback cuối cùng
     import webbrowser
-    print("[*] Mở cửa sổ ứng dụng...")
-    webbrowser.open(TARGET_URL)
+    print(f"[*] Mở Zalo trên trình duyệt mặc định: {target_url}")
+    webbrowser.open(target_url)
+    try:
+        while bridge.is_connected:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
-    launch_zalo_desktop()
+    main()

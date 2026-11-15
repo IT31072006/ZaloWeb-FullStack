@@ -8,43 +8,25 @@ Dự án bài tập lớn môn **Lập trình Mạng (LTM)**: Xây dựng hệ t
 
 ```
 BaiTapGK/
-├── run_web.py          # 🚀 Khởi chạy nhanh Zalo Web (Auto-migration & Daphne ASGI Server)
-├── run_desktop.py      # 💬 Khởi chạy trọn bộ Zalo Desktop (TCP Socket + WebRTC + Desktop Window)
-├── client_desktop.py   # 💻 Zalo Desktop Native App Window (Giao diện Zalo PC độc lập)
+├── server_gui.py       # 🛡️ Giao diện Đồ họa Quản trị Máy chủ Server GUI (PyQt6)
+├── server.py           # ⚙️ Máy chủ TCP Socket Server lõi kết nối PostgreSQL
 ├── client_gui.py       # 🖥️ Giao diện Desktop Client PyQt6 kết nối Socket TCP thuần
-├── manage.py           # ⚙️ Django CLI Management
-├── zalo_project/       # 🛠️ Cấu hình Django Backend
-│   ├── settings.py     # Cấu hình PostgreSQL / SQLite Fallback, Channels, CORS, REST Framework
-│   ├── asgi.py         # Cấu hình ASGI ProtocolTypeRouter (HTTP & WebSocket Channels)
-│   ├── wsgi.py         # Cấu hình WSGI tiêu chuẩn
-│   └── urls.py         # Routing URL cấp cao nhất của hệ thống
-├── chat/               # 💬 Ứng dụng Chat Core
-│   ├── models.py       # CSDL: UserProfile, Conversation, ConversationMember, Message, Task, Friendship, FriendRequest
-│   ├── views.py        # Logic API REST & View giao diện chính, Bạn bè, Cuộc gọi WebRTC
-│   ├── consumers.py    # WebSocket Consumer: Realtime Chat, Presence, Typing, WebRTC Signaling
-│   ├── routing.py      # Định tuyến WebSocket (/ws/chat/<conv_id>/)
-│   ├── serializers.py  # Chuyển đổi dữ liệu JSON REST API
-│   ├── authentication.py # CsrfExemptSessionAuthentication
-│   └── urls.py         # Định tuyến API chi tiết
-├── templates/          # 🎨 Giao diện HTML5 chuẩn Zalo Web
-│   ├── index.html      # Giao diện chính Zalo Web (Rail, Sidebar, Chat, Info Drawer, WebRTC Call Modal)
-│   ├── auth.html       # Giao diện Đăng nhập / Đăng ký chuyên biệt (hỗ trợ nhập IP/Port Server)
-│   └── call_window.html # Cửa sổ Video Call WebRTC độc lập cho Desktop
-├── static/             # 💅 CSS Zalo pixel-perfect & JS điều khiển
-│   ├── css/zalo.css    # Hệ thống CSS Zalo chuẩn xác & Dark Theme hiện đại
-│   └── js/zalo.js      # Client logic: WebSocket, WebRTC P2P, Web Audio, Uploads, Emojis, To-do
-├── database/           # 🗄️ Cơ sở dữ liệu & Schema DDL
-│   ├── schema.sql      # Định nghĩa cấu trúc DDL 9 bảng CSDL chuẩn SQL/PostgreSQL
-│   ├── zalo_chat.sql   # File SQL dump sạch sẽ (DDL + dữ liệu tài khoản và Cloud mẫu)
-│   └── README.md       # Tài liệu kiến trúc lưu trữ dữ liệu bền vững
-├── seed_data.py        # 🌱 Khởi tạo dữ liệu mẫu 100% giống ảnh chụp Zalo Web
-├── test_zalo_api.py    # 🧪 Bộ kiểm thử tự động 23/23 tính năng Web API
-├── test_websocket_webrtc.py # 🚀 Bộ kiểm thử tự động WebSocket Channels & WebRTC Signaling
-├── test_desktop_flow.py # 🧪 Kiểm thử tự động Desktop Client Socket TCP + PostgreSQL
+├── client_desktop.py   # 💻 Zalo Desktop Native App Window (Giao diện Zalo PC độc lập)
+├── run_desktop.py      # 💬 Khởi chạy trọn bộ Zalo Desktop (TCP Socket + WebRTC + Desktop Window)
+├── run_web.py          # 🚀 Khởi chạy nhanh Zalo Web (Auto-migration & Daphne ASGI Server)
 ├── protocol.py         # 📦 Định nghĩa giao thức truyền tin TCP Socket (Length-Prefixed Framing)
-├── server.py           # ⚙️ TCP Multi-threaded Chat Room Server lõi kết nối PostgreSQL
-├── client_cli.py       # 💻 TCP Chat Client Giao diện Dòng lệnh (CLI)
-└── test_chat.py        # 🧪 Bộ kiểm thử tự động Socket TCP Client - Server
+├── view_db.py          # 📊 Script xem nhanh thông tin CSDL PostgreSQL/SQLite
+├── seed_data.py        # 🌱 Khởi tạo dữ liệu mẫu tài khoản và tin nhắn
+├── manage.py           # ⚙️ Django CLI Management
+├── requirements.txt    # 📋 Danh sách thư viện phụ thuộc
+├── zalo_project/       # 🛠️ Cấu hình Django Backend (Settings, ASGI, WSGI, URLs)
+├── chat/               # 💬 Ứng dụng Chat Core (Models, Views, Consumers, Routing)
+├── database/           # 🗄️ Cơ sở dữ liệu & Schema DDL (PostgreSQL DDL & SQL Dump)
+├── docs/               # 📑 Báo cáo Đồ án môn học (.docx & hướng dẫn chỉnh sửa)
+├── templates/          # 🎨 Giao diện HTML5 chuẩn Zalo Web
+├── static/             # 💅 CSS Zalo pixel-perfect & JS điều khiển WebRTC
+├── tests/              # 🧪 Toàn bộ bộ kiểm thử tự động (Unit Test, Flow, WebRTC, API)
+└── media/              # 📁 Lưu trữ tệp tin tải lên (Avatars, Covers, Attachments)
 ```
 
 ---
@@ -138,23 +120,34 @@ export DB_PORT="5432"
 
 ## 4. Hướng Dẫn Khởi Chạy
 
-### Cách 1: Chạy Zalo Desktop (Khuyên dùng cho báo cáo Đồ án LTM)
+### Cách 1: Khởi chạy Máy Chủ Có Giao Diện (Server GUI - Khuyên dùng khi báo cáo)
+```bash
+python3 server_gui.py
+```
+> Bật ngay **Bảng Quản Trị Máy Chủ Đồ Họa (Server GUI)**:
+> - Nút **Khởi động / Dừng** đồng thời TCP Socket Server (:5555) và Web Server (:8000).
+> - Xem danh sách Client đang kết nối thời gian thực, địa chỉ IP, Cổng, kèm nút **Kick**.
+> - Khung xem Live Log mạng thời gian thực, có màu sắc rõ ràng.
+> - Tính năng **Phát thông báo khẩn (Broadcast)** từ Server tới toàn bộ Client.
+> - Các nút tắt mở nhanh Zalo Web, Django Admin và Client Chat Desktop (PyQt6).
+
+### Cách 2: Chạy Zalo Desktop (Native App Window)
 ```bash
 python3 run_desktop.py
 ```
 > Tự động khởi chạy trọn gói hệ thống máy chủ và bật ngay Cửa sổ Ứng dụng Zalo Desktop.
 > Để mở thêm Client thứ 2 trên cùng máy để test chat/gọi video: `python3 client_desktop.py 2`
 
-### Cách 2: Chạy Client Desktop PyQt6 (Socket TCP Thuần)
+### Cách 3: Chạy Client Desktop PyQt6 (Socket TCP Thuần)
 ```bash
-# Bước 1: Khởi động TCP Server
+# Bước 1: Khởi động TCP Server (Terminal hoặc Server GUI)
 python3 server.py
 
 # Bước 2: Mở giao diện Desktop Client PyQt6
 python3 client_gui.py
 ```
 
-### Cách 3: Chạy Zalo Web Browser
+### Cách 4: Chạy Zalo Web Browser
 ```bash
 python3 run_web.py
 ```
@@ -181,28 +174,28 @@ Mở trình duyệt và truy cập:
 
 ## 5. Kiểm Thử Tự Động Toàn Diện (Automated Testing)
 
-Hệ thống đi kèm 4 bộ kiểm thử tự động độc lập kiểm tra 100% các thành phần của đề tài:
+Hệ thống đi kèm 4 bộ kiểm thử tự động độc lập đặt gọn gàng trong thư mục `tests/`:
 
 ### 1. Kiểm thử REST API Web (23/23 bài test)
 ```bash
-python3 test_zalo_api.py
+python3 tests/test_zalo_api.py
 ```
 *Kiểm tra Đăng ký, Đăng nhập, Hồ sơ, Gửi tin nhắn đa phương tiện, Ghim/Bỏ ghim, Thả cảm xúc, Thu hồi, Xóa tin nhắn, Cloud, Danh bạ, Giao việc, Tìm kiếm.*
 
 ### 2. Kiểm thử WebSocket Channels & WebRTC P2P (8 bài test)
 ```bash
-python3 test_websocket_webrtc.py
+python3 tests/test_websocket_webrtc.py
 ```
 *Kiểm tra Kết nối WebSocket hai chiều, Presence Online, Gửi nhận tin nhắn 0ms, Typing Indicator, WebRTC Signaling (Call Request/Accept, SDP Offer/Answer, ICE Candidate), Thu hồi tin nhắn realtime, Đồng bộ Call Log.*
 
 ### 3. Kiểm thử Tích hợp Desktop Client Socket TCP + PostgreSQL
 ```bash
-python3 test_desktop_flow.py
+python3 tests/test_desktop_flow.py
 ```
 *Kiểm tra Xác thực đăng nhập qua Socket TCP với dữ liệu PostgreSQL, tải danh sách hội thoại và đồng bộ lịch sử tin nhắn.*
 
 ### 4. Kiểm thử TCP Socket Server & Protocol (Độc lập)
 ```bash
-python3 test_chat.py
+python3 tests/test_chat.py
 ```
 *Kiểm tra Giao thức TCP Socket tầng ứng dụng, Multi-threading, Broadcast, Private Message, Length-Prefixed Framing.*

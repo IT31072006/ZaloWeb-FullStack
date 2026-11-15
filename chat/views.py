@@ -22,16 +22,23 @@ from .serializers import UserProfileSerializer, MessageSerializer, ConversationL
 @ensure_csrf_cookie
 def index_view(request):
     """Giao diện chính Zalo Web."""
+    if not request.user.is_authenticated:
+        return redirect('/auth/')
     return render(request, 'index.html', {
         'user': request.user,
         'is_authenticated': request.user.is_authenticated
     })
 
 
+@ensure_csrf_cookie
 def auth_view(request):
     """Trang Đăng ký / Đăng nhập chuyên biệt."""
-    if request.user.is_authenticated:
-        return redirect('/')
+    # Chỉ đăng xuất khi người dùng chủ động yêu cầu qua ?logout=1
+    if request.user.is_authenticated and request.GET.get('logout') == '1':
+        if hasattr(request.user, 'profile'):
+            request.user.profile.is_online = False
+            request.user.profile.save(update_fields=['is_online', 'last_seen'])
+        logout(request)
     return render(request, 'auth.html')
 
 
@@ -92,8 +99,17 @@ def api_register(request):
 
     profile.save()
 
+    # Tự động tạo Cloud cá nhân cho tài khoản mới
+    cloud_conv, _ = Conversation.objects.get_or_create(
+        name="Cloud của tôi",
+        is_group=False,
+        created_by=user
+    )
+    ConversationMember.objects.get_or_create(conversation=cloud_conv, user=user, defaults={'role': 'admin'})
+
     # Tự động đăng nhập
     login(request, user)
+    request.session.save()
 
     serializer = UserProfileSerializer(profile)
     return Response({
@@ -121,6 +137,7 @@ def api_login(request):
 
     if user is not None:
         login(request, user)
+        request.session.save()
         profile, _ = UserProfile.objects.get_or_create(user=user)
         profile.is_online = True
         profile.save(update_fields=['is_online', 'last_seen'])

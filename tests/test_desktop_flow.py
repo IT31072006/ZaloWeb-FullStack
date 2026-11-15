@@ -2,9 +2,13 @@
 test_desktop_flow.py - Kiểm thử tự động luồng xác thực và tải dữ liệu PostgreSQL cho Desktop Client.
 """
 
+import os
+import sys
 import socket
 import threading
 import time
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import protocol
 from server import ChatServer
 
