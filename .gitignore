@@ -48,3 +48,7 @@ Thumbs.db
 # Log files
 *.log
 
+# Media attachments uploaded during runtime
+media/attachments/*
+!media/attachments/.gitkeep
+

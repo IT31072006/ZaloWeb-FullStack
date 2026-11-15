@@ -238,6 +238,20 @@ class ZaloTCPClient:
                         elif m.get("is_encrypted"):
                             m["content"] = protocol.decrypt_payload(raw_c)
 
+                        # Lưu file ảnh/audio/tệp lịch sử vào thư mục media/ nếu chưa có
+                        f_b64 = m.get("file_data")
+                        att_u = m.get("attachment_url")
+                        if f_b64 and att_u:
+                            try:
+                                rel_path = att_u.lstrip("/")
+                                abs_target = os.path.join(BASE_DIR, rel_path)
+                                if not os.path.exists(abs_target):
+                                    os.makedirs(os.path.dirname(abs_target), exist_ok=True)
+                                    with open(abs_target, "wb") as f_out:
+                                        f_out.write(base64.b64decode(f_b64))
+                            except Exception:
+                                pass
+
                     if conv_id is not None:
                         self.messages_cache[conv_id] = msgs
                     if p_type in self.pending_responses:
@@ -258,6 +272,19 @@ class ZaloTCPClient:
                         display_content = protocol.decrypt_payload(raw_content)
                     else:
                         display_content = raw_content
+
+                    # Lưu file đính kèm/ảnh/audio nhận được vào media/ cục bộ của máy này
+                    file_b64 = packet.get("file_data")
+                    att_url = packet.get("attachment_url")
+                    if file_b64 and att_url:
+                        try:
+                            rel_path = att_url.lstrip("/")
+                            abs_target = os.path.join(BASE_DIR, rel_path)
+                            os.makedirs(os.path.dirname(abs_target), exist_ok=True)
+                            with open(abs_target, "wb") as f_out:
+                                f_out.write(base64.b64decode(file_b64))
+                        except Exception as e:
+                            print(f"[!] Lỗi lưu file đính kèm cục bộ: {e}")
 
                     # Cập nhật xem trước trong danh sách hội thoại
                     txt = display_content or f"[{packet.get('file_name', 'Tệp tin')}]"
@@ -311,8 +338,9 @@ class ZaloTCPClient:
                         "is_recalled": False,
                         "reactions": [],
                     }
-                    if conv_id in self.messages_cache:
-                        self.messages_cache[conv_id].append(ui_msg)
+                    if conv_id not in self.messages_cache:
+                        self.messages_cache[conv_id] = []
+                    self.messages_cache[conv_id].append(ui_msg)
 
                     ui_event = {
                         "type": "chat_message",
@@ -642,18 +670,34 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             ctype = self.headers.get("Content-Type", "")
             if "multipart/form-data" in ctype:
                 fields, files = self.parse_form_data()
-                mtype = fields.get("type", "text")
-                content = fields.get("content", "")
+                mtype = fields.get("message_type") or fields.get("type", "text")
+                content = fields.get("content", "").strip()
 
-                if "file" in files and files["file"]["filename"]:
-                    file_item = files["file"]
+                file_item = files.get("attachment") or files.get("file")
+                if file_item and file_item.get("filename"):
                     fname = file_item["filename"]
                     fdata = file_item["data"]
-                    is_img = fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+                    is_img = (mtype == "image") or fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+                    is_audio = (mtype == "audio") or fname.lower().endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a"))
+                    actual_mtype = "image" if is_img else ("audio" if is_audio else "file")
                     sha256_hash = hashlib.sha256(fdata).hexdigest()
 
-                    # Phân mảnh 64KB nếu kích thước lớn
-                    if len(fdata) > protocol.CHUNK_SIZE:
+                    # Lưu file ngay tại máy client gửi vào media/ cục bộ
+                    now = datetime.datetime.now()
+                    rel_dir = os.path.join("attachments", now.strftime("%Y"), now.strftime("%m"))
+                    abs_dir = os.path.join(BASE_DIR, "media", rel_dir)
+                    os.makedirs(abs_dir, exist_ok=True)
+                    safe_fname = os.path.basename(fname)
+                    local_fpath = os.path.join(abs_dir, safe_fname)
+                    try:
+                        with open(local_fpath, "wb") as f_out:
+                            f_out.write(fdata)
+                    except Exception:
+                        pass
+                    saved_rel_url = f"/media/{rel_dir}/{safe_fname}"
+
+                    # Phân mảnh 64KB nếu kích thước lớn (> 64KB và là tệp tài liệu)
+                    if len(fdata) > protocol.CHUNK_SIZE and not is_img and not is_audio:
                         transfer_id = f"xfer_{uuid.uuid4().hex[:8]}"
                         total_chunks = (len(fdata) + protocol.CHUNK_SIZE - 1) // protocol.CHUNK_SIZE
 
@@ -666,7 +710,9 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                             "file_size": len(fdata),
                             "total_chunks": total_chunks,
                             "sha256": sha256_hash,
-                            "is_image": is_img
+                            "is_image": is_img,
+                            "message_type": actual_mtype,
+                            "content": content
                         })
 
                         def send_chunks_worker():
@@ -698,12 +744,14 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                                 "file_name": fname,
                                 "file_size": len(fdata),
                                 "sha256": sha256_hash,
-                                "is_image": is_img
+                                "is_image": is_img,
+                                "message_type": actual_mtype,
+                                "content": content
                             })
 
                         threading.Thread(target=send_chunks_worker, daemon=True).start()
                     else:
-                        # File nhỏ gửi trực tiếp kèm mã băm SHA-256
+                        # Gửi file trực tiếp kèm Base64 để bên kia lưu và hiển thị tức thì
                         b64_data = base64.b64encode(fdata).decode("utf-8")
                         pkt = {
                             "type": protocol.MSG_TYPE_FILE,
@@ -711,11 +759,14 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                             "file_name": fname,
                             "file_size": len(fdata),
                             "file_data": b64_data,
+                            "attachment_url": saved_rel_url,
                             "is_image": is_img,
+                            "message_type": actual_mtype,
+                            "content": content,
                             "sha256": sha256_hash,
                         }
                         self.client_bridge.send_tcp_packet(pkt)
-                else:
+                elif content:
                     # Mã hóa đầu cuối (E2EE) bằng AES-256-GCM trước khi truyền qua Socket TCP
                     enc_text = protocol.encrypt_payload(content)
                     pkt = {
@@ -728,16 +779,17 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                     self.client_bridge.send_tcp_packet(pkt)
             else:
                 body = self.read_json_body()
-                content = body.get("content", "")
-                enc_text = protocol.encrypt_payload(content)
-                pkt = {
-                    "type": protocol.MSG_TYPE_CHAT,
-                    "conversation_id": conv_id,
-                    "content": f"[ENC:AES-256-GCM]{enc_text}",
-                    "is_encrypted": True,
-                    "cipher_algo": "AES-256-GCM"
-                }
-                self.client_bridge.send_tcp_packet(pkt)
+                content = body.get("content", "").strip()
+                if content:
+                    enc_text = protocol.encrypt_payload(content)
+                    pkt = {
+                        "type": protocol.MSG_TYPE_CHAT,
+                        "conversation_id": conv_id,
+                        "content": f"[ENC:AES-256-GCM]{enc_text}",
+                        "is_encrypted": True,
+                        "cipher_algo": "AES-256-GCM"
+                    }
+                    self.client_bridge.send_tcp_packet(pkt)
 
             self.send_json({"status": "OK", "message": "Đã gửi qua TCP Socket"})
             return
@@ -926,6 +978,18 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             ctype = "image/x-icon"
         elif file_path.endswith(".mp3"):
             ctype = "audio/mpeg"
+        elif file_path.endswith(".webm"):
+            ctype = "audio/webm"
+        elif file_path.endswith(".ogg") or file_path.endswith(".oga"):
+            ctype = "audio/ogg"
+        elif file_path.endswith(".wav"):
+            ctype = "audio/wav"
+        elif file_path.endswith(".webp"):
+            ctype = "image/webp"
+        elif file_path.endswith(".gif"):
+            ctype = "image/gif"
+        elif file_path.endswith(".pdf"):
+            ctype = "application/pdf"
 
         with open(file_path, "rb") as f:
             data = f.read()

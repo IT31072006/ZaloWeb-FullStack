@@ -689,7 +689,7 @@ async function selectConversation(convId) {
 
     const chatSubtitle = document.getElementById('currentChatSubtitle');
     if (chatSubtitle) {
-      const e2eeBadge = `<span class="e2ee-badge" title="Mã hóa đầu cuối AES-256-GCM bảo vệ trên đường truyền Socket TCP" style="display:inline-flex; align-items:center; gap:2px; font-size:10.5px; margin-left:8px; color:#10b981; font-weight:600; background:rgba(16,185,129,0.1); padding:1px 6px; border-radius:10px;">🔒 E2EE</span>`;
+      const e2eeBadge = `<span class="e2ee-badge" title="Mã hóa đầu cuối AES-256-GCM bảo vệ trên đường truyền Socket TCP" style="display:inline-flex; align-items:center; gap:3px; font-size:11px; margin-left:8px; color:#10b981; font-weight:600; background:rgba(16,185,129,0.12); padding:2px 8px; border-radius:10px;">🛡️ Bảo mật E2EE</span>`;
       chatSubtitle.innerHTML = (conv.is_group
         ? `<span class="online-indicator"></span> ${conv.member_count || 2} thành viên`
         : `<span class="online-indicator"></span> Đang hoạt động`) + e2eeBadge;
@@ -1431,7 +1431,7 @@ function renderTimeline() {
           ${bodyHtml}
           <div class="msg-meta-row">
             <span>${msg.formatted_time || ''}</span>
-            ${msg.is_encrypted ? '<span title="Mã hóa đầu cuối E2EE (AES-256-GCM)" style="font-size:10px; margin-left:4px; opacity:0.85; cursor:help;">🔒</span>' : ''}
+            ${msg.is_encrypted ? '<span title="Được bảo vệ bằng mã hóa đầu cuối E2EE (AES-256-GCM)" style="font-size:10.5px; margin-left:4px; opacity:0.85; cursor:help;">🛡️</span>' : ''}
             ${statusHtml}
           </div>
         </div>
@@ -1839,9 +1839,52 @@ function togglePlayAudio(btn, url) {
 // 4. SENDING MESSAGES (Text, Image, Audio, Code)
 // ==============================================================================
 
+function handleSelectedImageForPreview(file) {
+  if (!file) return;
+  state.pendingAttachedImage = file;
+  const bar = document.getElementById('chatAttachmentPreviewBar');
+  const thumb = document.getElementById('attachedImagePreviewThumb');
+  const nameEl = document.getElementById('attachedImageName');
+  const sizeEl = document.getElementById('attachedImageSize');
+  const input = document.getElementById('chatInputText');
+
+  if (thumb) thumb.src = URL.createObjectURL(file);
+  if (nameEl) nameEl.innerText = file.name;
+  if (sizeEl) sizeEl.innerText = `${(file.size / 1024).toFixed(1)} KB`;
+  if (bar) bar.style.display = 'flex';
+
+  if (input) {
+    input.placeholder = "Nhập tin nhắn kèm theo ảnh và nhấn Enter để gửi...";
+    input.focus();
+  }
+}
+
+function clearAttachedImagePreview() {
+  state.pendingAttachedImage = null;
+  const bar = document.getElementById('chatAttachmentPreviewBar');
+  const input = document.getElementById('chatInputText');
+  if (bar) bar.style.display = 'none';
+  if (input) {
+    const convTitle = state.currentConversation?.title || state.currentConversation?.name || 'hội thoại';
+    input.placeholder = `Nhập @, tin nhắn tới ${convTitle}`;
+  }
+}
+
 async function sendTextMessage() {
   const input = document.getElementById('chatInputText');
-  const content = input?.value.trim();
+  const content = input?.value.trim() || '';
+
+  // 1. Nếu có ảnh đang đính kèm chờ gửi -> gửi ảnh kèm nội dung tin nhắn (Caption)
+  if (state.pendingAttachedImage) {
+    const file = state.pendingAttachedImage;
+    clearAttachedImagePreview();
+    input.value = '';
+    input.style.height = 'auto';
+    await uploadImageMessage(file, content);
+    return;
+  }
+
+  // 2. Gửi tin nhắn văn bản thông thường
   if (!content || !state.currentConversationId) return;
 
   input.value = '';
@@ -1854,17 +1897,6 @@ async function sendTextMessage() {
   if (state.isTypingSent && state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.isTypingSent = false;
     state.chatSocket.send(JSON.stringify({ type: 'typing', is_typing: false }));
-  }
-
-  // Ưu tiên gửi trực tiếp qua WebSocket (độ trễ 0ms)
-  if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
-    state.chatSocket.send(JSON.stringify({
-      type: 'chat_message',
-      content: content,
-      reply_to_id: replyToId,
-      message_type: 'text'
-    }));
-    return;
   }
 
   try {
@@ -1881,14 +1913,7 @@ async function sendTextMessage() {
       })
     });
     const newMsg = await res.json();
-    if (res.ok) {
-      state.messages.push(newMsg);
-      state.lastMessageId = newMsg.id;
-      renderTimeline();
-      scrollChatToBottom();
-      playNotificationSound();
-      loadConversations();
-    } else {
+    if (!res.ok) {
       showToast(newMsg.error || "Gửi tin nhắn thất bại!");
     }
   } catch (err) {
@@ -1896,20 +1921,21 @@ async function sendTextMessage() {
   }
 }
 
-async function uploadImageMessage(file) {
+async function uploadImageMessage(file, captionText = '') {
   if (!file || !state.currentConversationId) return;
 
   const formData = new FormData();
   formData.append('message_type', 'image');
   formData.append('attachment', file);
-  formData.append('content', file.name);
+  formData.append('file', file);
+  formData.append('content', captionText.trim());
 
   if (state.replyingTo) {
     formData.append('reply_to_id', state.replyingTo.id);
     cancelReply();
   }
 
-  showToast("Đang tải ảnh lên...");
+  showToast("Đang gửi hình ảnh...");
   try {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {
       method: 'POST',
@@ -1918,13 +1944,9 @@ async function uploadImageMessage(file) {
     });
     const newMsg = await res.json();
     if (res.ok) {
-      state.messages.push(newMsg);
-      state.lastMessageId = newMsg.id;
-      renderTimeline();
-      scrollChatToBottom();
-      playNotificationSound();
-      loadConversations();
       showToast("Đã gửi ảnh thành công!");
+    } else {
+      showToast(newMsg.error || "Gửi ảnh thất bại!");
     }
   } catch (err) {
     showToast("Lỗi gửi tệp ảnh!");
@@ -1937,6 +1959,7 @@ async function uploadDocFile(file) {
   const formData = new FormData();
   formData.append('message_type', 'file');
   formData.append('attachment', file);
+  formData.append('file', file);
   formData.append('content', file.name);
 
   if (state.replyingTo) {
@@ -1953,16 +1976,12 @@ async function uploadDocFile(file) {
     });
     const newMsg = await res.json();
     if (res.ok) {
-      state.messages.push(newMsg);
-      state.lastMessageId = newMsg.id;
-      renderTimeline();
-      scrollChatToBottom();
-      playNotificationSound();
-      loadConversations();
       showToast("Đã gửi tệp tin thành công!");
+    } else {
+      showToast(newMsg.error || "Gửi tệp thất bại!");
     }
   } catch (err) {
-    showToast("Lỗi gửi tệp!");
+    showToast("Lỗi gửi tệp tin!");
   }
 }
 
@@ -2076,6 +2095,7 @@ async function stopAndSendVoiceRecording() {
     const formData = new FormData();
     formData.append('message_type', 'audio');
     formData.append('attachment', file);
+    formData.append('file', file);
     formData.append('content', 'Tin nhắn thoại ghi âm');
 
     if (state.replyingTo) {
@@ -5084,7 +5104,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const file = items[i].getAsFile();
           if (file) {
             e.preventDefault();
-            uploadImageMessage(file);
+            handleSelectedImageForPreview(file);
             return;
           }
         }
@@ -5132,7 +5152,7 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           if (file.type && file.type.startsWith('image/')) {
-            uploadImageMessage(file);
+            handleSelectedImageForPreview(file);
           } else {
             uploadDocFile(file);
           }
@@ -5146,10 +5166,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Attachments
   document.getElementById('imageFileInput')?.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      uploadImageMessage(e.target.files[0]);
+      handleSelectedImageForPreview(e.target.files[0]);
       e.target.value = '';
     }
   });
+
+  document.getElementById('btnCancelAttachedImage')?.addEventListener('click', clearAttachedImagePreview);
 
   document.getElementById('docFileInput')?.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {

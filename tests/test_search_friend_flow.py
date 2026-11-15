@@ -28,20 +28,49 @@ def run_test():
     sock1.connect((SERVER_HOST, SERVER_PORT))
     sock2.connect((SERVER_HOST, SERVER_PORT))
 
-    # Đăng nhập quan và bao
-    protocol.send_packet(sock1, {"type": protocol.MSG_TYPE_LOGIN, "username": "quan", "password": "password123"})
+    # Đăng ký 2 tài khoản kiểm thử ngẫu nhiên để đảm bảo danh sách hội thoại ban đầu hoàn toàn trống
+    ts = int(time.time())
+    u1 = f"user_{ts}_a"
+    u2 = f"user_{ts}_b"
+    p1 = f"09{ts % 100000000:08d}"
+    p2 = f"08{ts % 100000000:08d}"
+
+    # Đăng ký u1
+    protocol.send_packet(sock1, {
+        "type": protocol.MSG_TYPE_REGISTER,
+        "username": u1,
+        "password": "password123",
+        "display_name": f"Người dùng A ({ts})",
+        "phone": p1,
+    })
+    reg_ack1 = protocol.recv_packet(sock1)
+    assert reg_ack1 and reg_ack1.get("status") == "OK", f"Reg 1 failed: {reg_ack1}"
+
+    # Đăng ký u2
+    protocol.send_packet(sock2, {
+        "type": protocol.MSG_TYPE_REGISTER,
+        "username": u2,
+        "password": "password123",
+        "display_name": f"Người dùng B ({ts})",
+        "phone": p2,
+    })
+    reg_ack2 = protocol.recv_packet(sock2)
+    assert reg_ack2 and reg_ack2.get("status") == "OK", f"Reg 2 failed: {reg_ack2}"
+
+    # Đăng nhập u1 và u2
+    protocol.send_packet(sock1, {"type": protocol.MSG_TYPE_LOGIN, "username": u1, "password": "password123"})
     ack1 = protocol.recv_packet(sock1)
     assert ack1 and ack1.get("status") == "OK"
     print(f"✅ Client 1 đăng nhập: {ack1.get('user', {}).get('display_name')} (Conversations: {len(ack1.get('conversations', []))})")
-    # Kiểm tra danh sách hội thoại ban đầu phải TRỐNG (0 cuộc trò chuyện)
+    # Kiểm tra danh sách hội thoại ban đầu phải TRỐNG (0 cuộc trò chuyện người khác)
     assert len(ack1.get("conversations", [])) == 0, "Danh sách hội thoại ban đầu phải để trống!"
     print("✅ 1. Danh sách hội thoại ban đầu hoàn toàn ĐỂ TRỐNG (chưa có người chat ảo giả lập).")
 
-    protocol.send_packet(sock2, {"type": protocol.MSG_TYPE_LOGIN, "username": "bao", "password": "password123"})
+    protocol.send_packet(sock2, {"type": protocol.MSG_TYPE_LOGIN, "username": u2, "password": "password123"})
     ack2 = protocol.recv_packet(sock2)
     assert ack2 and ack2.get("status") == "OK"
-    bao_id = ack2.get("user", {}).get("id")
-    print(f"✅ Client 2 đăng nhập: {ack2.get('user', {}).get('display_name')} (ID: {bao_id})")
+    u2_id = ack2.get("user", {}).get("id")
+    print(f"✅ Client 2 đăng nhập: {ack2.get('user', {}).get('display_name')} (ID: {u2_id})")
 
     # Dọn dẹp các gói tin broadcast online
     time.sleep(0.3)
@@ -59,19 +88,19 @@ def run_test():
     sock1.settimeout(4.0)
     sock2.settimeout(4.0)
 
-    # 2. Client 1 tìm kiếm người dùng bằng Số điện thoại của Bảo (0934567890)
-    print("[*] Client 1 tìm kiếm bạn bè qua SĐT: '0934567890'...")
+    # 2. Client 1 tìm kiếm người dùng bằng Số điện thoại của u2
+    print(f"[*] Client 1 tìm kiếm bạn bè qua SĐT: '{p2}'...")
     protocol.send_packet(sock1, {
         "type": protocol.MSG_TYPE_SEARCH_USER,
-        "phone": "0934567890",
+        "phone": p2,
     })
     search_ack = protocol.recv_packet(sock1)
     assert search_ack and search_ack.get("status") == "found", f"Search failed: {search_ack}"
     found_user = search_ack.get("user", {})
-    assert found_user.get("username") == "bao", f"User mismatch: {found_user}"
+    assert found_user.get("username") == u2, f"User mismatch: {found_user}"
     print(f"✅ 2. Tìm kiếm SĐT thành công: Tìm thấy '{found_user.get('display_name')}' (@{found_user.get('username')}, SĐT: {found_user.get('phone')})")
 
-    # 3. Client 1 gửi Lời mời kết bạn tới Bảo (ID found_user['id'])
+    # 3. Client 1 gửi Lời mời kết bạn tới u2 (ID found_user['id'])
     print(f"[*] Client 1 gửi Lời mời kết bạn tới {found_user.get('display_name')} (ID {found_user['id']})...")
     protocol.send_packet(sock1, {
         "type": protocol.MSG_TYPE_FRIEND_REQ,

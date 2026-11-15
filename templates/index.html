@@ -334,6 +334,18 @@
           </button>
         </div>
 
+        <!-- Image / File Attachment Preview Bar (Trước khi gửi kèm chú thích) -->
+        <div class="chat-attachment-preview-bar" id="chatAttachmentPreviewBar" style="display:none; padding:8px 14px; background:#f0f7ff; border-top:1px solid #d0e4ff; align-items:center; justify-content:space-between;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <img id="attachedImagePreviewThumb" src="" alt="preview" style="width:42px; height:42px; object-fit:cover; border-radius:6px; border:1px solid #b8d5ff;">
+            <div>
+              <div id="attachedImageName" style="font-weight:600; font-size:12.5px; color:#0052cc; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+              <div id="attachedImageSize" style="font-size:11px; color:#666;"></div>
+            </div>
+          </div>
+          <button type="button" class="reply-cancel-btn" id="btnCancelAttachedImage" title="Hủy ảnh đính kèm" style="border:none; background:transparent; cursor:pointer; font-size:22px; line-height:1; color:#888; padding:0 6px;">&times;</button>
+        </div>
+
         <!-- Input Box -->
         <div class="input-textarea-row">
           <textarea class="chat-textarea" id="chatInputText" placeholder="Nhập @, tin nhắn tới 2026_2027_VKU_LTM(5)" rows="1"></textarea>

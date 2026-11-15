@@ -522,6 +522,16 @@ class ChatServer:
                                 is_enc = bool(m.content and m.content.startswith("[ENC:"))
                                 r_list = serialize_reactions_for_message(m, nickname)
 
+                                b64_file = ""
+                                if m.attachment:
+                                    try:
+                                        att_path = m.attachment.path
+                                        if os.path.exists(att_path) and os.path.getsize(att_path) <= 15 * 1024 * 1024:
+                                            with open(att_path, "rb") as af:
+                                                b64_file = base64.b64encode(af.read()).decode("utf-8")
+                                    except Exception:
+                                        pass
+
                                 history_list.append({
                                     "id": m.id,
                                     "conversation_id": conv_id,
@@ -536,6 +546,7 @@ class ChatServer:
                                     "attachment_url": m.attachment.url if m.attachment else "",
                                     "attachment_name": m.attachment_name or "",
                                     "attachment_size": m.attachment_size or 0,
+                                    "file_data": b64_file,
                                     "code_language": m.code_language or "python",
                                     "call_duration": m.call_duration or 0,
                                     "call_status": m.call_status or "",
@@ -679,12 +690,15 @@ class ChatServer:
                                 c_obj = Conversation.objects.get(id=conv_id)
                                 u_sender = User.objects.get(username=nickname)
                                 file_bytes = base64.b64decode(file_b64)
-                                m_type = 'image' if is_image else 'file'
+                                m_type = packet.get("message_type") or ('image' if is_image else 'file')
+                                caption = packet.get("content", "").strip()
+                                default_caption = f"Đã gửi {'hình ảnh' if m_type == 'image' else ('tin nhắn thoại' if m_type == 'audio' else 'tệp')}: {file_name}"
+                                m_content = caption if caption else default_caption
                                 m_obj = Message(
                                     conversation=c_obj,
                                     sender=u_sender,
                                     message_type=m_type,
-                                    content=f"Đã gửi { 'hình ảnh' if is_image else 'tệp' }: {file_name}",
+                                    content=m_content,
                                     attachment_name=file_name,
                                     attachment_size=size_str,
                                 )
@@ -712,7 +726,7 @@ class ChatServer:
                                     "attachment_name": file_name,
                                     "file_data": file_b64,
                                     "attachment_url": saved_url,
-                                    "is_image": is_image,
+                                    "is_image": (m_type == "image"),
                                     "timestamp": msg_time,
                                     "formatted_time": msg_time,
                                     "created_at": m_obj.created_at.isoformat(),
