@@ -1298,7 +1298,11 @@ function renderTimeline() {
         </div>
       `;
     } else {
-      bodyHtml = `<div>${escapeHtml(msg.content)}</div>`;
+      let textContent = msg.content || '';
+      if (textContent.startsWith('[ENC:AES-256-GCM]')) {
+        textContent = textContent.replace('[ENC:AES-256-GCM]', '');
+      }
+      bodyHtml = `<div>${escapeHtml(textContent)}</div>`;
     }
 
     // Quoted reply card if replying to a message
@@ -1899,6 +1903,42 @@ async function sendTextMessage() {
     state.chatSocket.send(JSON.stringify({ type: 'typing', is_typing: false }));
   }
 
+  // ✨ OPTIMISTIC UI: Hiện tin nhắn + icon ngay tức thì trên màn hình (0ms latency, qua luôn không cần chờ)
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const tempMsgId = Date.now();
+  const optimisticMsg = {
+    id: tempMsgId,
+    temp_id: tempMsgId,
+    conversation_id: state.currentConversationId,
+    sender_id: state.currentUser?.id || 0,
+    sender_name: state.currentUser?.display_name || state.currentUser?.username || 'Tôi',
+    sender_avatar: state.currentUser?.avatar_url || '',
+    is_me: true,
+    message_type: 'text',
+    content: content,
+    is_encrypted: true,
+    formatted_time: timeStr,
+    timestamp: timeStr,
+    created_at: now.toISOString(),
+    is_recalled: false,
+    reactions: []
+  };
+
+  state.messages.push(optimisticMsg);
+  state.lastMessageId = tempMsgId;
+  renderTimeline();
+  scrollChatToBottom();
+  playNotificationSound();
+
+  // Cập nhật xem trước trong danh sách hội thoại bên trái ngay lập tức
+  const currentConv = state.conversations.find(c => c.id === state.currentConversationId);
+  if (currentConv) {
+    currentConv.last_message = { preview: content, type: 'text', time_ago: timeStr };
+    currentConv.time_label = timeStr;
+    renderConversationsList();
+  }
+
   try {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {
       method: 'POST',
@@ -1912,9 +1952,11 @@ async function sendTextMessage() {
         reply_to_id: replyToId
       })
     });
-    const newMsg = await res.json();
+    const result = await res.json();
     if (!res.ok) {
-      showToast(newMsg.error || "Gửi tin nhắn thất bại!");
+      showToast(result.error || "Gửi tin nhắn thất bại!");
+    } else if (result.id) {
+      optimisticMsg.id = result.id;
     }
   } catch (err) {
     console.error("Lỗi gửi tin nhắn:", err);
@@ -1923,6 +1965,35 @@ async function sendTextMessage() {
 
 async function uploadImageMessage(file, captionText = '') {
   if (!file || !state.currentConversationId) return;
+
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const tempMsgId = Date.now();
+  const localBlobUrl = URL.createObjectURL(file);
+  const optimisticMsg = {
+    id: tempMsgId,
+    temp_id: tempMsgId,
+    conversation_id: state.currentConversationId,
+    sender_id: state.currentUser?.id || 0,
+    sender_name: state.currentUser?.display_name || state.currentUser?.username || 'Tôi',
+    sender_avatar: state.currentUser?.avatar_url || '',
+    is_me: true,
+    message_type: 'image',
+    content: captionText.trim(),
+    attachment_url: localBlobUrl,
+    attachment_name: file.name,
+    formatted_time: timeStr,
+    timestamp: timeStr,
+    created_at: now.toISOString(),
+    is_recalled: false,
+    reactions: []
+  };
+
+  state.messages.push(optimisticMsg);
+  state.lastMessageId = tempMsgId;
+  renderTimeline();
+  scrollChatToBottom();
+  playNotificationSound();
 
   const formData = new FormData();
   formData.append('message_type', 'image');
@@ -3391,17 +3462,33 @@ function handleWebSocketMessage(data) {
 
   if (type === 'chat_message') {
     const newMsg = data.message;
-    if (!state.messages.some(m => m.id === newMsg.id)) {
-      state.messages.push(newMsg);
-      state.lastMessageId = newMsg.id;
-      renderTimeline();
-      scrollChatToBottom();
-      playNotificationSound();
-      loadConversations();
-      if (!newMsg.is_me) {
-        sendMarkRead(newMsg.id);
+    if (!newMsg) return;
+
+    // 1. Kiểm tra nếu là tin nhắn do chính mình gửi vừa được hiển thị optimistic
+    const existingIndex = state.messages.findIndex(m => 
+      m.id === newMsg.id || 
+      (m.is_me && m.content === newMsg.content && Math.abs(new Date(m.created_at) - new Date(newMsg.created_at || Date.now())) < 10000)
+    );
+
+    if (existingIndex !== -1) {
+      // Cập nhật ID chính thức từ server, không thêm trùng lặp
+      state.messages[existingIndex].id = newMsg.id;
+      if (newMsg.formatted_time) state.messages[existingIndex].formatted_time = newMsg.formatted_time;
+      if (newMsg.attachment_url) state.messages[existingIndex].attachment_url = newMsg.attachment_url;
+    } else {
+      // 2. Tin nhắn mới từ đối phương hoặc tin nhắn đến cuộc trò chuyện hiện tại
+      if (parseInt(newMsg.conversation_id) === parseInt(state.currentConversationId)) {
+        state.messages.push(newMsg);
+        state.lastMessageId = newMsg.id;
+        renderTimeline();
+        scrollChatToBottom();
+        if (!newMsg.is_me) {
+          playNotificationSound();
+          sendMarkRead(newMsg.id);
+        }
       }
     }
+    loadConversations();
   } else if (type === 'pong') {
     const now = Date.now();
     const rtt = Math.max(1, now - (data.client_timestamp || now));

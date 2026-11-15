@@ -209,8 +209,8 @@ class ZaloTCPClient:
 
                 p_type = packet.get("type")
 
-                # Tự động đánh thức bất kỳ request đồng bộ nào đang chờ phản hồi (send_and_wait)
-                if p_type in self.pending_responses:
+                # Đánh thức các request đồng bộ thông thường (ngoại trừ HISTORY_ACK sẽ đánh thức sau khi giải mã E2EE xong)
+                if p_type in self.pending_responses and p_type != protocol.MSG_TYPE_HISTORY_ACK:
                     self.response_payloads[p_type] = packet
                     self.pending_responses[p_type].set()
 
@@ -223,7 +223,9 @@ class ZaloTCPClient:
 
                 # 2. Gói tin phản hồi REGISTER_ACK
                 elif p_type == protocol.MSG_TYPE_REGISTER_ACK:
-                    pass
+                    if p_type in self.pending_responses:
+                        self.response_payloads[p_type] = packet
+                        self.pending_responses[p_type].set()
 
                 # 3. Gói tin phản hồi HISTORY_ACK (Giải mã E2EE AES-256-GCM cho tin nhắn cũ)
                 elif p_type == protocol.MSG_TYPE_HISTORY_ACK:
@@ -347,7 +349,7 @@ class ZaloTCPClient:
                         "message": ui_msg
                     }
                     self._broadcast_to_ui(ui_event)
-                    self._broadcast_to_ui(packet)
+                    # Không gửi lại packet thô chưa giải mã ra UI WebSocket
 
                 # 5. Gói tin Đang soạn tin nhắn (Typing Indicator)
                 elif p_type in (protocol.MSG_TYPE_TYPING, "typing"):
@@ -513,6 +515,30 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"error": "Không tìm thấy hội thoại"}, status=404)
             return
 
+        # 7.1 API Đồng bộ tin nhắn mới (Fallback khi WebSocket gặp sự cố mạng)
+        elif path.startswith("/api/conversations/") and "/sync/" in path:
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            after_id_str = query.get("after_id", ["0"])[0]
+            try:
+                after_id = int(after_id_str)
+            except ValueError:
+                after_id = 0
+
+            all_msgs = self.client_bridge.messages_cache.get(conv_id, [])
+            new_msgs = [m for m in all_msgs if m.get("id", 0) > after_id]
+            for m in new_msgs:
+                raw_c = m.get("content", "")
+                if raw_c.startswith("[ENC:AES-256-GCM]"):
+                    m["is_encrypted"] = True
+                    cipher_str = raw_c[len("[ENC:AES-256-GCM]"):]
+                    m["content"] = protocol.decrypt_payload(cipher_str)
+                elif m.get("is_encrypted") and raw_c.startswith("[ENC:"):
+                    cipher_str = raw_c.split("]", 1)[-1] if "]" in raw_c else raw_c
+                    m["content"] = protocol.decrypt_payload(cipher_str)
+            self.send_json(new_msgs)
+            return
+
         # 8. API Lịch sử tin nhắn một cuộc trò chuyện (Truy vấn qua TCP Socket)
         elif path.startswith("/api/conversations/") and path.endswith("/messages/"):
             parts = [p for p in path.split("/") if p]
@@ -522,6 +548,15 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 pkt = {"type": protocol.MSG_TYPE_LOAD_HISTORY, "conversation_id": conv_id}
                 ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_HISTORY_ACK, timeout=4.0)
                 msgs = ack.get("messages", []) if ack else self.client_bridge.messages_cache.get(conv_id, [])
+                for m in msgs:
+                    raw_c = m.get("content", "")
+                    if raw_c.startswith("[ENC:AES-256-GCM]"):
+                        m["is_encrypted"] = True
+                        cipher_str = raw_c[len("[ENC:AES-256-GCM]"):]
+                        m["content"] = protocol.decrypt_payload(cipher_str)
+                    elif m.get("is_encrypted") and raw_c.startswith("[ENC:"):
+                        cipher_str = raw_c.split("]", 1)[-1] if "]" in raw_c else raw_c
+                        m["content"] = protocol.decrypt_payload(cipher_str)
                 self.send_json(msgs)
                 return
             self.send_json([])
