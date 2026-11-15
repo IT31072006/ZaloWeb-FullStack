@@ -322,6 +322,20 @@ class ZaloTCPClient:
                             "is_priority": True,
                         })
 
+                    msg_mtype = packet.get("message_type")
+                    if not msg_mtype:
+                        fname_l = (packet.get("file_name") or "").lower()
+                        if packet.get("is_image") or fname_l.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                            msg_mtype = "image"
+                        elif fname_l.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")):
+                            msg_mtype = "video"
+                        elif fname_l.endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a")):
+                            msg_mtype = "audio"
+                        elif p_type == protocol.MSG_TYPE_FILE:
+                            msg_mtype = "file"
+                        else:
+                            msg_mtype = "text"
+
                     ui_msg = {
                         "id": packet.get("message_id") or packet.get("id") or int(time.time()),
                         "conversation_id": conv_id,
@@ -329,7 +343,7 @@ class ZaloTCPClient:
                         "sender_name": packet.get("sender_name") or packet.get("sender", "Bạn"),
                         "sender_avatar": packet.get("sender_avatar") or "",
                         "is_me": (packet.get("sender") == (self.current_user.get("username") if self.current_user else "")),
-                        "message_type": packet.get("message_type") or ("image" if packet.get("is_image") else ("file" if p_type == protocol.MSG_TYPE_FILE else "text")),
+                        "message_type": msg_mtype,
                         "content": display_content,
                         "is_encrypted": is_enc,
                         "attachment_url": packet.get("attachment_url", ""),
@@ -713,8 +727,16 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                     fname = file_item["filename"]
                     fdata = file_item["data"]
                     is_img = (mtype == "image") or fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
-                    is_audio = (mtype == "audio") or fname.lower().endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a"))
-                    actual_mtype = "image" if is_img else ("audio" if is_audio else "file")
+                    is_video = (mtype == "video") or fname.lower().endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v"))
+                    is_audio = (mtype == "audio") or (fname.lower().endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a")) and not is_video)
+                    if is_img:
+                        actual_mtype = "image"
+                    elif is_video:
+                        actual_mtype = "video"
+                    elif is_audio:
+                        actual_mtype = "audio"
+                    else:
+                        actual_mtype = "file"
                     sha256_hash = hashlib.sha256(fdata).hexdigest()
 
                     # Lưu file ngay tại máy client gửi vào media/ cục bộ
@@ -732,7 +754,7 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                     saved_rel_url = f"/media/{rel_dir}/{safe_fname}"
 
                     # Phân mảnh 64KB nếu kích thước lớn (> 64KB và là tệp tài liệu)
-                    if len(fdata) > protocol.CHUNK_SIZE and not is_img and not is_audio:
+                    if len(fdata) > protocol.CHUNK_SIZE and not is_img and not is_video and not is_audio:
                         transfer_id = f"xfer_{uuid.uuid4().hex[:8]}"
                         total_chunks = (len(fdata) + protocol.CHUNK_SIZE - 1) // protocol.CHUNK_SIZE
 
@@ -1013,8 +1035,16 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             ctype = "image/x-icon"
         elif file_path.endswith(".mp3"):
             ctype = "audio/mpeg"
+        elif file_path.endswith(".mp4"):
+            ctype = "video/mp4"
         elif file_path.endswith(".webm"):
-            ctype = "audio/webm"
+            ctype = "video/webm"
+        elif file_path.endswith(".mov"):
+            ctype = "video/quicktime"
+        elif file_path.endswith(".mkv"):
+            ctype = "video/x-matroska"
+        elif file_path.endswith(".avi"):
+            ctype = "video/x-msvideo"
         elif file_path.endswith(".ogg") or file_path.endswith(".oga"):
             ctype = "audio/ogg"
         elif file_path.endswith(".wav"):
@@ -1032,6 +1062,7 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         self.wfile.write(data)

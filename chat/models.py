@@ -139,6 +139,7 @@ class Message(models.Model):
     MESSAGE_TYPES = [
         ('text', 'Văn bản'),
         ('image', 'Hình ảnh'),
+        ('video', 'Video'),
         ('audio', 'Tin nhắn thoại'),
         ('file', 'Tệp tin'),
         ('code', 'Đoạn mã lập trình'),

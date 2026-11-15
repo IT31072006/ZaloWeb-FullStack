@@ -89,6 +89,19 @@ class ChatServer:
         """Trả về thời gian hiện tại định dạng HH:MM:SS."""
         return datetime.datetime.now().strftime("%H:%M:%S")
 
+    @staticmethod
+    def format_local_time(dt) -> str:
+        """Định dạng thời gian theo múi giờ địa phương Việt Nam (GMT+7)."""
+        if not dt:
+            return ""
+        if HAS_DJANGO:
+            try:
+                from django.utils import timezone
+                return timezone.localtime(dt).strftime("%H:%M")
+            except Exception:
+                pass
+        return dt.strftime("%H:%M")
+
     def _log(self, tag: str, message: str):
         """Ghi log ra console và gọi callback GUI nếu có."""
         ts = self.get_timestamp()
@@ -391,7 +404,7 @@ class ChatServer:
 
                             c_title = c.get_title_for_user(user_obj)
                             c_avatar = c.get_avatar_for_user(user_obj)
-                            time_str = c.updated_at.strftime("%H:%M") if c.updated_at else ""
+                            time_str = self.format_local_time(c.updated_at) if c.updated_at else ""
                             convs_data.append({
                                 "id": c.id,
                                 "name": c_title,
@@ -518,7 +531,7 @@ class ChatServer:
                                     s_avatar = f"https://ui-avatars.com/api/?name={urllib.parse.quote(s_disp)}&background=0068ff&color=ffffff"
 
                                 is_me = (s_user == nickname)
-                                time_str = m.created_at.strftime("%H:%M")
+                                time_str = self.format_local_time(m.created_at)
                                 is_enc = bool(m.content and m.content.startswith("[ENC:"))
                                 r_list = serialize_reactions_for_message(m, nickname)
 
@@ -587,7 +600,7 @@ class ChatServer:
                                     content=content
                                 )
                                 c_obj.save(update_fields=['updated_at'])
-                                msg_time = m_obj.created_at.strftime("%H:%M")
+                                msg_time = self.format_local_time(m_obj.created_at)
                                 msg_id = m_obj.id
 
                                 sender_disp = u_sender.profile.get_display_name() if hasattr(u_sender, 'profile') else nickname
@@ -692,7 +705,7 @@ class ChatServer:
                                 file_bytes = base64.b64decode(file_b64)
                                 m_type = packet.get("message_type") or ('image' if is_image else 'file')
                                 caption = packet.get("content", "").strip()
-                                default_caption = f"Đã gửi {'hình ảnh' if m_type == 'image' else ('tin nhắn thoại' if m_type == 'audio' else 'tệp')}: {file_name}"
+                                default_caption = f"Đã gửi {'hình ảnh' if m_type == 'image' else ('video' if m_type == 'video' else ('tin nhắn thoại' if m_type == 'audio' else 'tệp'))}: {file_name}"
                                 m_content = caption if caption else default_caption
                                 m_obj = Message(
                                     conversation=c_obj,
@@ -704,7 +717,7 @@ class ChatServer:
                                 )
                                 m_obj.attachment.save(file_name, ContentFile(file_bytes), save=True)
                                 c_obj.save(update_fields=['updated_at'])
-                                msg_time = m_obj.created_at.strftime("%H:%M")
+                                msg_time = self.format_local_time(m_obj.created_at)
                                 saved_url = m_obj.attachment.url
 
                                 sender_disp = u_sender.profile.get_display_name() if hasattr(u_sender, 'profile') else nickname
@@ -841,7 +854,7 @@ class ChatServer:
                                         )
                                         m_obj.attachment.save(file_name, ContentFile(file_bytes), save=True)
                                         c_obj.save(update_fields=['updated_at'])
-                                        msg_time = m_obj.created_at.strftime("%H:%M")
+                                        msg_time = self.format_local_time(m_obj.created_at)
                                         msg_id = m_obj.id
                                         saved_url = m_obj.attachment.url
 

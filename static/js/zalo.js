@@ -1118,6 +1118,18 @@ function getMessageDateKey(dateStr) {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
+function formatMessageTime(msg) {
+  if (msg.created_at) {
+    try {
+      const d = new Date(msg.created_at);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (e) {}
+  }
+  return msg.formatted_time || msg.timestamp || '';
+}
+
 function formatDateLabel(dateStr) {
   if (!dateStr) return 'Gần đây';
   const d = new Date(dateStr);
@@ -1228,6 +1240,16 @@ function renderTimeline() {
           <img src="${imgUrl}" alt="Hình ảnh">
         </div>
         ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:4px;">${escapeHtml(msg.content)}</div>` : ''}
+      `;
+    } else if (msg.message_type === 'video') {
+      const vidUrl = msg.attachment_url || '';
+      bodyHtml = `
+        <div class="msg-video-card" style="max-width:380px; border-radius:10px; overflow:hidden; background:#000; box-shadow:0 3px 12px rgba(0,0,0,0.18);">
+          <video controls preload="metadata" playsinline style="width:100%; max-height:280px; display:block; border-radius:10px; outline:none; background:#000;" src="${vidUrl}">
+            Trình duyệt không hỗ trợ phát video.
+          </video>
+        </div>
+        ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:6px; font-size:13.5px; line-height:1.4;">${escapeHtml(msg.content)}</div>` : ''}
       `;
     } else if (msg.message_type === 'audio') {
       const audioUrl = msg.attachment_url || '';
@@ -1434,7 +1456,7 @@ function renderTimeline() {
           ${quoteHtml}
           ${bodyHtml}
           <div class="msg-meta-row">
-            <span>${msg.formatted_time || ''}</span>
+            <span>${formatMessageTime(msg)}</span>
             ${msg.is_encrypted ? '<span title="Được bảo vệ bằng mã hóa đầu cuối E2EE (AES-256-GCM)" style="font-size:10.5px; margin-left:4px; opacity:0.85; cursor:help;">🛡️</span>' : ''}
             ${statusHtml}
           </div>
@@ -1848,17 +1870,37 @@ function handleSelectedImageForPreview(file) {
   state.pendingAttachedImage = file;
   const bar = document.getElementById('chatAttachmentPreviewBar');
   const thumb = document.getElementById('attachedImagePreviewThumb');
+  const thumbVid = document.getElementById('attachedVideoPreviewThumb');
   const nameEl = document.getElementById('attachedImageName');
   const sizeEl = document.getElementById('attachedImageSize');
   const input = document.getElementById('chatInputText');
 
-  if (thumb) thumb.src = URL.createObjectURL(file);
+  const isVideo = (file.type && file.type.startsWith('video/')) || 
+    ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.flv', '.wmv'].some(ext => file.name.toLowerCase().endsWith(ext));
+
+  if (isVideo) {
+    if (thumb) thumb.style.display = 'none';
+    if (thumbVid) {
+      thumbVid.src = URL.createObjectURL(file);
+      thumbVid.style.display = 'block';
+    }
+  } else {
+    if (thumbVid) {
+      thumbVid.style.display = 'none';
+      thumbVid.src = '';
+    }
+    if (thumb) {
+      thumb.src = URL.createObjectURL(file);
+      thumb.style.display = 'block';
+    }
+  }
+
   if (nameEl) nameEl.innerText = file.name;
   if (sizeEl) sizeEl.innerText = `${(file.size / 1024).toFixed(1)} KB`;
   if (bar) bar.style.display = 'flex';
 
   if (input) {
-    input.placeholder = "Nhập tin nhắn kèm theo ảnh và nhấn Enter để gửi...";
+    input.placeholder = isVideo ? "Nhập chú thích cho video và nhấn Enter để gửi..." : "Nhập tin nhắn kèm theo ảnh và nhấn Enter để gửi...";
     input.focus();
   }
 }
@@ -1866,7 +1908,14 @@ function handleSelectedImageForPreview(file) {
 function clearAttachedImagePreview() {
   state.pendingAttachedImage = null;
   const bar = document.getElementById('chatAttachmentPreviewBar');
+  const thumb = document.getElementById('attachedImagePreviewThumb');
+  const thumbVid = document.getElementById('attachedVideoPreviewThumb');
   const input = document.getElementById('chatInputText');
+  if (thumbVid) {
+    thumbVid.src = '';
+    thumbVid.style.display = 'none';
+  }
+  if (thumb) thumb.style.display = 'block';
   if (bar) bar.style.display = 'none';
   if (input) {
     const convTitle = state.currentConversation?.title || state.currentConversation?.name || 'hội thoại';
@@ -1878,13 +1927,21 @@ async function sendTextMessage() {
   const input = document.getElementById('chatInputText');
   const content = input?.value.trim() || '';
 
-  // 1. Nếu có ảnh đang đính kèm chờ gửi -> gửi ảnh kèm nội dung tin nhắn (Caption)
+  // 1. Nếu có tệp ảnh hoặc video đang đính kèm chờ gửi -> gửi kèm nội dung tin nhắn (Caption)
   if (state.pendingAttachedImage) {
     const file = state.pendingAttachedImage;
     clearAttachedImagePreview();
     input.value = '';
     input.style.height = 'auto';
-    await uploadImageMessage(file, content);
+
+    const isVideo = (file.type && file.type.startsWith('video/')) || 
+      ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.flv', '.wmv'].some(ext => file.name.toLowerCase().endsWith(ext));
+
+    if (isVideo) {
+      await uploadVideoMessage(file, content);
+    } else {
+      await uploadImageMessage(file, content);
+    }
     return;
   }
 
@@ -2024,8 +2081,76 @@ async function uploadImageMessage(file, captionText = '') {
   }
 }
 
+async function uploadVideoMessage(file, captionText = '') {
+  if (!file || !state.currentConversationId) return;
+
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const tempMsgId = Date.now();
+  const localBlobUrl = URL.createObjectURL(file);
+  const optimisticMsg = {
+    id: tempMsgId,
+    temp_id: tempMsgId,
+    conversation_id: state.currentConversationId,
+    sender_id: state.currentUser?.id || 0,
+    sender_name: state.currentUser?.display_name || state.currentUser?.username || 'Tôi',
+    sender_avatar: state.currentUser?.avatar_url || '',
+    is_me: true,
+    message_type: 'video',
+    content: captionText.trim(),
+    attachment_url: localBlobUrl,
+    attachment_name: file.name,
+    formatted_time: timeStr,
+    timestamp: timeStr,
+    created_at: now.toISOString(),
+    is_recalled: false,
+    reactions: []
+  };
+
+  state.messages.push(optimisticMsg);
+  state.lastMessageId = tempMsgId;
+  renderTimeline();
+  scrollChatToBottom();
+  playNotificationSound();
+
+  const formData = new FormData();
+  formData.append('message_type', 'video');
+  formData.append('attachment', file);
+  formData.append('file', file);
+  formData.append('content', captionText.trim());
+
+  if (state.replyingTo) {
+    formData.append('reply_to_id', state.replyingTo.id);
+    cancelReply();
+  }
+
+  showToast("Đang gửi video...");
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCookie('csrftoken') },
+      body: formData
+    });
+    const newMsg = await res.json();
+    if (res.ok) {
+      showToast("Đã gửi video thành công!");
+    } else {
+      showToast(newMsg.error || "Gửi video thất bại!");
+    }
+  } catch (err) {
+    showToast("Lỗi gửi tệp video!");
+  }
+}
+
 async function uploadDocFile(file) {
   if (!file || !state.currentConversationId) return;
+
+  const isVideo = (file.type && file.type.startsWith('video/')) || 
+    ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.flv', '.wmv'].some(ext => file.name.toLowerCase().endsWith(ext));
+  if (isVideo) {
+    handleSelectedImageForPreview(file);
+    return;
+  }
 
   const formData = new FormData();
   formData.append('message_type', 'file');
@@ -5238,7 +5363,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (files && files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          if (file.type && file.type.startsWith('image/')) {
+          if (file.type && (file.type.startsWith('image/') || file.type.startsWith('video/'))) {
             handleSelectedImageForPreview(file);
           } else {
             uploadDocFile(file);
