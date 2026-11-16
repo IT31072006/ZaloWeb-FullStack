@@ -1215,6 +1215,11 @@ function renderTimeline() {
     row.dataset.msgId = msg.id;
 
     let bodyHtml = '';
+    const attName = (msg.attachment_name || msg.attachment_url || '').toLowerCase();
+    const isVideoMsg = (msg.message_type === 'video') ||
+      (attName && (['.mp4', '.mov', '.mkv', '.avi', '.flv', '.wmv', '.m4v'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && !attName.includes('voice'))));
+    const isAudioMsg = (msg.message_type === 'audio' && !isVideoMsg) ||
+      (attName && (['.mp3', '.wav', '.ogg', '.m4a'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && attName.includes('voice'))));
 
     if (isRecalled) {
       bodyHtml = `
@@ -1241,7 +1246,7 @@ function renderTimeline() {
         </div>
         ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:4px;">${escapeHtml(msg.content)}</div>` : ''}
       `;
-    } else if (msg.message_type === 'video') {
+    } else if (isVideoMsg) {
       const vidUrl = msg.attachment_url || '';
       bodyHtml = `
         <div class="msg-video-card" style="max-width:380px; border-radius:10px; overflow:hidden; background:#000; box-shadow:0 3px 12px rgba(0,0,0,0.18);">
@@ -1251,7 +1256,7 @@ function renderTimeline() {
         </div>
         ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:6px; font-size:13.5px; line-height:1.4;">${escapeHtml(msg.content)}</div>` : ''}
       `;
-    } else if (msg.message_type === 'audio') {
+    } else if (isAudioMsg) {
       const audioUrl = msg.attachment_url || '';
       bodyHtml = `
         <div class="msg-audio-card">

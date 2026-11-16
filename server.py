@@ -395,6 +395,10 @@ class ChatServer:
                             if last_m:
                                 if last_m.message_type == 'image':
                                     last_txt = "[Hình ảnh]"
+                                elif last_m.message_type == 'video':
+                                    last_txt = "[Video]"
+                                elif last_m.message_type == 'audio':
+                                    last_txt = "[Tin nhắn thoại]"
                                 elif last_m.message_type == 'file':
                                     last_txt = f"[Tệp tin] {last_m.attachment_name}"
                                 elif last_m.message_type == 'call':
@@ -703,7 +707,18 @@ class ChatServer:
                                 c_obj = Conversation.objects.get(id=conv_id)
                                 u_sender = User.objects.get(username=nickname)
                                 file_bytes = base64.b64decode(file_b64)
-                                m_type = packet.get("message_type") or ('image' if is_image else 'file')
+                                fname_lower = file_name.lower()
+                                m_type = packet.get("message_type")
+                                if not m_type or m_type == "file" or (m_type == "audio" and fname_lower.endswith(".webm") and not fname_lower.startswith("voice_") and "voice" not in fname_lower):
+                                    if is_image or fname_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                                        m_type = "image"
+                                    elif fname_lower.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname_lower.endswith(".webm") and not fname_lower.startswith("voice_") and "voice" not in fname_lower):
+                                        m_type = "video"
+                                    elif fname_lower.endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname_lower.endswith(".webm") and (fname_lower.startswith("voice_") or "voice" in fname_lower)):
+                                        m_type = "audio"
+                                    else:
+                                        m_type = "file"
+
                                 caption = packet.get("content", "").strip()
                                 default_caption = f"Đã gửi {'hình ảnh' if m_type == 'image' else ('video' if m_type == 'video' else ('tin nhắn thoại' if m_type == 'audio' else 'tệp'))}: {file_name}"
                                 m_content = caption if caption else default_caption
@@ -843,7 +858,15 @@ class ChatServer:
                                     try:
                                         c_obj = Conversation.objects.get(id=conv_id)
                                         u_sender = User.objects.get(username=nickname)
-                                        m_type = 'image' if is_image else 'file'
+                                        fname_lower = file_name.lower()
+                                        if is_image or fname_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                                            m_type = "image"
+                                        elif fname_lower.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname_lower.endswith(".webm") and not fname_lower.startswith("voice_") and "voice" not in fname_lower):
+                                            m_type = "video"
+                                        elif fname_lower.endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname_lower.endswith(".webm") and (fname_lower.startswith("voice_") or "voice" in fname_lower)):
+                                            m_type = "audio"
+                                        else:
+                                            m_type = "file"
                                         m_obj = Message(
                                             conversation=c_obj,
                                             sender=u_sender,

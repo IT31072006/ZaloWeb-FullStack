@@ -118,6 +118,29 @@ def run_test():
     assert audio_msg is not None, "Audio message not found in Client B!"
     print(f"✅ 4. Gửi tin nhắn thoại (Voice Note) thành công! Loại: {audio_msg.get('message_type')}, URL: {audio_msg.get('attachment_url')}")
 
+    # 5. Test Video (.webm Screencast and .mp4)
+    dummy_video_bytes = b"\x1aE\xdf\xa3WebMHeader..."
+    vid_b64 = base64.b64encode(dummy_video_bytes).decode("utf-8")
+    bridge_a.send_tcp_packet({
+        "type": protocol.MSG_TYPE_FILE,
+        "conversation_id": conv_id,
+        "file_name": "Screencast From 2026-11-16 08-00-00.webm",
+        "file_size": len(dummy_video_bytes),
+        "file_data": vid_b64,
+        "attachment_url": "/media/attachments/2026/11/Screencast_test.webm",
+        "is_image": False,
+        "message_type": "video",
+        "content": "Video quay màn hình bài tập nè!",
+        "sha256": "dummy"
+    })
+    time.sleep(0.6)
+
+    msgs_b = bridge_b.messages_cache.get(conv_id, [])
+    vid_msg = next((m for m in msgs_b if m.get("message_type") == "video"), None)
+    assert vid_msg is not None, "Video message not found in Client B!"
+    assert vid_msg.get("content") == "Video quay màn hình bài tập nè!"
+    print(f"✅ 5. Gửi video (Video Screencast .webm / .mp4) thành công! Loại: {vid_msg.get('message_type')}, Chú thích: '{vid_msg.get('content')}'")
+
     bridge_a.should_stop = True
     bridge_b.should_stop = True
     bridge_a.tcp_sock.close()

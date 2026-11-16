@@ -323,13 +323,13 @@ class ZaloTCPClient:
                         })
 
                     msg_mtype = packet.get("message_type")
-                    if not msg_mtype:
-                        fname_l = (packet.get("file_name") or "").lower()
+                    fname_l = (packet.get("file_name") or packet.get("attachment_name") or "").lower()
+                    if not msg_mtype or msg_mtype == "file" or (msg_mtype == "audio" and fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
                         if packet.get("is_image") or fname_l.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
                             msg_mtype = "image"
-                        elif fname_l.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")):
+                        elif fname_l.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
                             msg_mtype = "video"
-                        elif fname_l.endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a")):
+                        elif fname_l.endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname_l.endswith(".webm") and (fname_l.startswith("voice_") or "voice" in fname_l)):
                             msg_mtype = "audio"
                         elif p_type == protocol.MSG_TYPE_FILE:
                             msg_mtype = "file"
@@ -727,8 +727,8 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                     fname = file_item["filename"]
                     fdata = file_item["data"]
                     is_img = (mtype == "image") or fname.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
-                    is_video = (mtype == "video") or fname.lower().endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v"))
-                    is_audio = (mtype == "audio") or (fname.lower().endswith((".webm", ".mp3", ".wav", ".ogg", ".m4a")) and not is_video)
+                    is_video = (mtype == "video") or fname.lower().endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname.lower().endswith(".webm") and not fname.lower().startswith("voice_") and "voice" not in fname.lower())
+                    is_audio = (mtype == "audio") or fname.lower().endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname.lower().endswith(".webm") and (fname.lower().startswith("voice_") or "voice" in fname.lower() or mtype == "audio"))
                     if is_img:
                         actual_mtype = "image"
                     elif is_video:
