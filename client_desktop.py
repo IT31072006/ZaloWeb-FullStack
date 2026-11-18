@@ -373,11 +373,14 @@ class ZaloTCPClient:
                 elif p_type in (protocol.MSG_TYPE_REACTION, "reaction_update"):
                     conv_id = packet.get("conversation_id")
                     msg_id = packet.get("message_id")
-                    if conv_id in self.messages_cache:
+                    if conv_id in self.messages_cache and msg_id:
                         for m in self.messages_cache[conv_id]:
-                            if m.get("id") == msg_id:
-                                m["reactions"] = packet.get("reactions", [])
-                                break
+                            try:
+                                if int(m.get("id", 0)) == int(msg_id):
+                                    m["reactions"] = packet.get("reactions", [])
+                                    break
+                            except Exception:
+                                pass
                     self._broadcast_to_ui(packet)
 
                 # 7. Gói tin Thu hồi tin nhắn (Message Recalled)
@@ -422,6 +425,23 @@ class ZaloTCPClient:
                         "type": "user_update",
                         "user": u_info
                     })
+
+                # 8.3 Gói tin Ghim tin nhắn thời gian thực
+                elif p_type in ("message_pinned",):
+                    conv_id = packet.get("conversation_id")
+                    p_info = packet.get("pinned_message")
+                    for c in self.conversations:
+                        if c.get("id") == conv_id:
+                            c["pinned_message"] = p_info
+                            break
+                    self._broadcast_to_ui(packet)
+
+                # 8.4 Gói tin Nhóm chat mới được tạo (Group Chat Realtime Notification)
+                elif p_type in ("conversation_created",):
+                    conv = packet.get("conversation")
+                    if conv and not any(c.get("id") == conv.get("id") for c in self.conversations):
+                        self.conversations.insert(0, conv)
+                    self._broadcast_to_ui(packet)
 
                 # 9. Gói tin danh sách người dùng online
                 elif p_type == protocol.MSG_TYPE_USER_LIST:
@@ -904,16 +924,21 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"status": "OK"})
             return
 
-        # 7. API Tạo hội thoại 1-1 mới (Chuyển tiếp qua TCP Socket CREATE_CONV)
+        # 7. API Tạo hội thoại 1-1 mới hoặc Tạo nhóm chat (Chuyển tiếp qua TCP Socket CREATE_CONV)
         elif path == "/api/conversations/create/":
             body = self.read_json_body()
-            target_user_id = body.get("user_id")
+            is_group = body.get("is_group", False)
+            group_name = body.get("name", "").strip()
+            members = body.get("members", [])
+            target_user_id = body.get("user_id") or body.get("target_user_id")
             pkt = {
                 "type": protocol.MSG_TYPE_CREATE_CONV,
+                "is_group": is_group,
+                "name": group_name,
+                "members": members,
                 "target_user_id": target_user_id,
-                "is_group": False,
             }
-            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CREATE_CONV_ACK, timeout=5.0)
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CREATE_CONV_ACK, timeout=6.0)
             if ack and ack.get("status") == "OK":
                 conv = ack.get("conversation", {})
                 if not any(c.get("id") == conv.get("id") for c in self.client_bridge.conversations):
@@ -921,6 +946,32 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(conv, status=201)
             else:
                 self.send_json({"error": ack.get("message") if ack else "Lỗi tạo hội thoại"}, status=400)
+            return
+
+        # 7.1 API Ghim tin nhắn / Bỏ ghim tin nhắn (Chuyển tiếp qua TCP Socket PIN_MESSAGE)
+        elif path.startswith("/api/conversations/") and path.endswith("/pin_message/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            msg_id = body.get("message_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_PIN_MESSAGE,
+                "conversation_id": conv_id,
+                "message_id": msg_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_PIN_MESSAGE_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                pinned_info = ack.get("pinned_message")
+                for c in self.client_bridge.conversations:
+                    if c.get("id") == conv_id:
+                        c["pinned_message"] = pinned_info
+                        break
+                self.send_json({
+                    "message": "Đã ghim tin nhắn lên đầu cuộc trò chuyện!" if msg_id else "Đã bỏ ghim tin nhắn.",
+                    "pinned_message": pinned_info,
+                })
+            else:
+                self.send_json({"error": "Không thể ghim tin nhắn"}, status=400)
             return
 
         # 8. API Gửi lời mời kết bạn (Chuyển tiếp qua TCP Socket FRIEND_REQ)

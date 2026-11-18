@@ -36,6 +36,8 @@ MSG_TYPE_QUIT = "QUIT"                      # Client thông báo rời phòng
 MSG_TYPE_TYPING = "TYPING"                  # Thông báo trạng thái đang soạn tin nhắn (typing indicator)
 MSG_TYPE_REACTION = "REACTION"              # Thả biểu cảm cảm xúc (message_id, emoji)
 MSG_TYPE_RECALL = "RECALL"                  # Thu hồi tin nhắn cho cả phòng
+MSG_TYPE_PIN_MESSAGE = "PIN_MESSAGE"        # Ghim tin nhắn lên đầu hội thoại
+MSG_TYPE_PIN_MESSAGE_ACK = "PIN_MESSAGE_ACK"# Xác nhận kết quả ghim tin nhắn
 
 # Tìm kiếm người dùng, Khởi tạo hội thoại & Kết bạn (Friend System qua Socket TCP)
 MSG_TYPE_SEARCH_USER = "SEARCH_USER"          # Tìm kiếm user theo SĐT hoặc username

@@ -409,6 +409,18 @@ class ChatServer:
                             c_title = c.get_title_for_user(user_obj)
                             c_avatar = c.get_avatar_for_user(user_obj)
                             time_str = self.format_local_time(c.updated_at) if c.updated_at else ""
+
+                            pinned_info = None
+                            if c.pinned_message:
+                                pm = c.pinned_message
+                                s_name = pm.sender.profile.get_display_name() if (pm.sender and hasattr(pm.sender, 'profile')) else (pm.sender.username if pm.sender else "Hệ thống")
+                                pinned_info = {
+                                    "id": pm.id,
+                                    "content": pm.content,
+                                    "sender_name": s_name,
+                                    "formatted_time": self.format_local_time(pm.created_at),
+                                }
+
                             convs_data.append({
                                 "id": c.id,
                                 "name": c_title,
@@ -429,6 +441,7 @@ class ChatServer:
                                 "is_pinned": False,
                                 "is_muted": False,
                                 "is_priority": True,
+                                "pinned_message": pinned_info,
                             })
 
                         # Lấy danh sách liên hệ để chat 1-1
@@ -961,11 +974,12 @@ class ChatServer:
 
                 # D.5 THẢ BIỂU CẢM CẢM XÚC (REACTIONS)
                 elif p_type == protocol.MSG_TYPE_REACTION:
-                    msg_id = packet.get("message_id")
+                    msg_id_raw = packet.get("message_id")
                     emoji = packet.get("emoji", "").strip()
                     conv_id = packet.get("conversation_id")
-                    if HAS_DJANGO and msg_id and emoji:
+                    if HAS_DJANGO and msg_id_raw and emoji:
                         try:
+                            msg_id = int(msg_id_raw)
                             m_obj = Message.objects.get(id=msg_id)
                             u_obj = User.objects.get(username=nickname)
                             if not conv_id:
@@ -990,11 +1004,21 @@ class ChatServer:
                                 "timestamp": self.get_timestamp(),
                             }
                             c_obj = m_obj.conversation
+                            sent_to_sender = False
                             for mem in c_obj.memberships.select_related('user').all():
                                 with self.lock:
                                     target_sock = self.clients_by_name.get(mem.user.username)
                                 if target_sock:
                                     protocol.send_packet(target_sock, react_packet)
+                                    if target_sock == client_sock:
+                                        sent_to_sender = True
+
+                            if not sent_to_sender:
+                                protocol.send_packet(client_sock, react_packet)
+
+                            self._log("REACTION", f"[{nickname}] thả {emoji} vào tin nhắn #{msg_id}")
+                        except Exception as ex:
+                            self._log("ERROR", f"Lỗi reaction DB: {ex}")
 
                             self._log("REACTION", f"[{nickname}] thả {emoji} vào tin nhắn #{msg_id}")
                         except Exception as ex:
@@ -1031,6 +1055,53 @@ class ChatServer:
                                 self._log("RECALL", f"[{nickname}] đã thu hồi tin nhắn #{msg_id}")
                         except Exception as ex:
                             self._log("ERROR", f"Lỗi thu hồi tin nhắn DB: {ex}")
+
+                # D.6.1 GHIM TIN NHẮN (PIN MESSAGE LƯU VĨNH VIỄN POSTGRESQL)
+                elif p_type == protocol.MSG_TYPE_PIN_MESSAGE:
+                    conv_id = packet.get("conversation_id")
+                    msg_id_raw = packet.get("message_id")
+                    pinned_info = None
+
+                    if HAS_DJANGO and conv_id:
+                        try:
+                            c_obj = Conversation.objects.get(id=int(conv_id))
+                            if msg_id_raw:
+                                m_obj = Message.objects.get(id=int(msg_id_raw), conversation=c_obj)
+                                c_obj.pinned_message = m_obj
+                                c_obj.save(update_fields=['pinned_message'])
+
+                                s_name = m_obj.sender.profile.get_display_name() if (m_obj.sender and hasattr(m_obj.sender, 'profile')) else (m_obj.sender.username if m_obj.sender else "Hệ thống")
+                                pinned_info = {
+                                    "id": m_obj.id,
+                                    "content": m_obj.content,
+                                    "sender_name": s_name,
+                                    "formatted_time": self.format_local_time(m_obj.created_at),
+                                }
+                            else:
+                                c_obj.pinned_message = None
+                                c_obj.save(update_fields=['pinned_message'])
+
+                            pin_packet = {
+                                "type": "message_pinned",
+                                "conversation_id": int(conv_id),
+                                "pinned_message": pinned_info,
+                            }
+                            for mem in c_obj.memberships.select_related('user').all():
+                                with self.lock:
+                                    target_sock = self.clients_by_name.get(mem.user.username)
+                                if target_sock:
+                                    protocol.send_packet(target_sock, pin_packet)
+
+                            self._log("PIN", f"[{nickname}] {'ghim' if msg_id_raw else 'bỏ ghim'} tin nhắn trong hội thoại #{conv_id}")
+                        except Exception as ex:
+                            self._log("ERROR", f"Lỗi ghim tin nhắn DB: {ex}")
+
+                    protocol.send_packet(client_sock, {
+                        "type": protocol.MSG_TYPE_PIN_MESSAGE_ACK,
+                        "status": "OK",
+                        "conversation_id": conv_id,
+                        "pinned_message": pinned_info,
+                    })
 
                 # D.7 NHỊP TIM GIỮ KẾT NỐI & ĐO ĐỘ TRỄ (PING / PONG KEEP-ALIVE)
                 elif p_type in (protocol.MSG_TYPE_PING, "ping"):
@@ -1162,18 +1233,117 @@ class ChatServer:
                         "users": users_list
                     })
 
-                # D.9 TẠO HOẶC LẤY HỘI THOẠI 1-1 ĐỂ BẮT ĐẦU NHẮN TIN
+                # D.9 TẠO HỘI THOẠI 1-1 HOẶC TẠO NHÓM CHAT (GROUP CHAT)
                 elif p_type == protocol.MSG_TYPE_CREATE_CONV:
+                    is_group = packet.get("is_group", False)
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+
+                    if not u_curr:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CREATE_CONV_ACK,
+                            "status": "ERROR",
+                            "message": "Không tìm thấy người dùng hiện tại."
+                        })
+                        continue
+
+                    # --- TRƯỜNG HỢP A: TẠO NHÓM CHAT MỚI (GROUP CHAT) ---
+                    if is_group:
+                        group_name = packet.get("name", "").strip() or "Nhóm trò chuyện mới"
+                        member_ids = packet.get("members", [])
+                        c_obj = Conversation.objects.create(
+                            name=group_name,
+                            is_group=True,
+                            created_by=u_curr
+                        )
+                        # Trưởng nhóm (admin)
+                        ConversationMember.objects.create(conversation=c_obj, user=u_curr, role='admin')
+
+                        # Thêm các thành viên được chọn
+                        for m_id in member_ids:
+                            try:
+                                m_user = User.objects.filter(id=int(m_id)).first()
+                                if m_user and m_user != u_curr:
+                                    ConversationMember.objects.create(conversation=c_obj, user=m_user, role='member')
+                            except Exception:
+                                pass
+
+                        # Tạo tin nhắn hệ thống đầu tiên
+                        disp_curr = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        sys_msg = Message.objects.create(
+                            conversation=c_obj,
+                            sender=u_curr,
+                            message_type='text',
+                            content=f"{disp_curr} đã tạo nhóm '{group_name}'."
+                        )
+                        time_str = self.format_local_time(c_obj.created_at)
+
+                        members_data = []
+                        for mem in c_obj.memberships.select_related('user__profile').all():
+                            mp = getattr(mem.user, 'profile', None)
+                            with self.lock:
+                                is_on = mem.user.username in self.clients_by_name
+                            members_data.append({
+                                "id": mem.user.id,
+                                "username": mem.user.username,
+                                "display_name": mp.get_display_name() if mp else mem.user.username,
+                                "avatar_url": mp.get_avatar_url() if mp else "",
+                                "role": mem.role,
+                                "is_online": is_on,
+                            })
+
+                        group_conv_dict = {
+                            "id": c_obj.id,
+                            "title": group_name,
+                            "name": group_name,
+                            "is_group": True,
+                            "avatar_url": c_obj.get_avatar_for_user(u_curr),
+                            "unread_count": 0,
+                            "member_count": c_obj.get_member_count(),
+                            "is_priority": True,
+                            "last_message": {
+                                "id": sys_msg.id,
+                                "preview": sys_msg.content,
+                                "type": "text",
+                                "time_ago": time_str,
+                            },
+                            "time_label": time_str,
+                            "updated_at": time_str,
+                            "pinned_message": None,
+                            "members": members_data,
+                        }
+
+                        # 1. Phản hồi cho người tạo nhóm
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CREATE_CONV_ACK,
+                            "status": "OK",
+                            "conversation": group_conv_dict
+                        })
+
+                        # 2. Phát tán thông báo cho TẤT CẢ thành viên trong nhóm mở nhóm chat ngay lập tức!
+                        group_notify = {
+                            "type": "conversation_created",
+                            "conversation": group_conv_dict
+                        }
+                        for mem in c_obj.memberships.select_related('user').all():
+                            if mem.user.username != nickname:
+                                with self.lock:
+                                    target_sock = self.clients_by_name.get(mem.user.username)
+                                if target_sock:
+                                    protocol.send_packet(target_sock, group_notify)
+
+                        self._log("GROUP", f"[{nickname}] đã tạo nhóm mới '{group_name}' với {c_obj.get_member_count()} thành viên.")
+                        continue
+
+                    # --- TRƯỜNG HỢP B: TẠO HOẶC LẤY HỘI THOẠI 1-1 ---
                     target_user_id = packet.get("target_user_id") or packet.get("user_id")
                     target_username = packet.get("target_username")
-                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
                     target_user = None
                     if target_user_id:
                         target_user = User.objects.filter(id=int(target_user_id)).first()
                     elif target_username:
                         target_user = User.objects.filter(username=target_username).first()
 
-                    if not u_curr or not target_user:
+                    if not target_user:
                         protocol.send_packet(client_sock, {
                             "type": protocol.MSG_TYPE_CREATE_CONV_ACK,
                             "status": "ERROR",

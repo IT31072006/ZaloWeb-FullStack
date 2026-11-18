@@ -1224,10 +1224,13 @@ function renderTimeline() {
 
     let bodyHtml = '';
     const attName = (msg.attachment_name || msg.attachment_url || '').toLowerCase();
-    const isVideoMsg = (msg.message_type === 'video') ||
-      (attName && (['.mp4', '.mov', '.mkv', '.avi', '.flv', '.wmv', '.m4v'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && !attName.includes('voice'))));
-    const isAudioMsg = (msg.message_type === 'audio' && !isVideoMsg) ||
-      (attName && (['.mp3', '.wav', '.ogg', '.m4a'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && attName.includes('voice'))));
+    const isImageMsg = (msg.message_type === 'image') ||
+      (attName && (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => attName.endsWith(ext)))) ||
+      (msg.attachment_url && (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => msg.attachment_url.toLowerCase().endsWith(ext))));
+    const isVideoMsg = (!isImageMsg && ((msg.message_type === 'video') ||
+      (attName && (['.mp4', '.mov', '.mkv', '.avi', '.flv', '.wmv', '.m4v'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && !attName.includes('voice'))))));
+    const isAudioMsg = (!isImageMsg && !isVideoMsg && ((msg.message_type === 'audio') ||
+      (attName && (['.mp3', '.wav', '.ogg', '.m4a'].some(ext => attName.endsWith(ext)) || (attName.endsWith('.webm') && attName.includes('voice'))))));
 
     if (isRecalled) {
       bodyHtml = `
@@ -1246,13 +1249,13 @@ function renderTimeline() {
           <pre><code>${escapeHtml(msg.content)}</code></pre>
         </div>
       `;
-    } else if (msg.message_type === 'image') {
-      const imgUrl = msg.attachment_url || '';
+    } else if (isImageMsg) {
+      const imgUrl = msg.attachment_url || (msg.content && (msg.content.startsWith('/media/') || msg.content.startsWith('http') || msg.content.startsWith('blob:')) ? msg.content : '');
       bodyHtml = `
         <div class="msg-image-card" onclick="openLightbox('${imgUrl}')">
-          <img src="${imgUrl}" alt="Hình ảnh">
+          <img src="${imgUrl}" alt="Hình ảnh" onerror="this.onerror=null; this.src='/static/images/image-placeholder.png';">
         </div>
-        ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:4px;">${escapeHtml(msg.content)}</div>` : ''}
+        ${msg.content && msg.content !== msg.attachment_name && !msg.content.startsWith('/media/') && !msg.content.startsWith('http') && !msg.content.startsWith('blob:') ? `<div style="margin-top:4px;">${escapeHtml(msg.content)}</div>` : ''}
       `;
     } else if (isVideoMsg) {
       const vidUrl = msg.attachment_url || '';
@@ -1633,6 +1636,35 @@ async function toggleReaction(msgId, emoji) {
   if (!state.currentConversationId) return;
   triggerFloatingReaction(msgId, emoji);
 
+  // ✨ Hiển thị ngay biểu tượng cảm xúc dưới tin nhắn (0ms Optimistic UI)
+  const targetMsg = state.messages.find(m => parseInt(m.id) === parseInt(msgId));
+  if (targetMsg) {
+    if (!targetMsg.reactions) targetMsg.reactions = [];
+    const currentUsername = state.currentUser ? state.currentUser.username : '';
+    let rObj = targetMsg.reactions.find(r => r.emoji === emoji);
+    if (rObj) {
+      if (rObj.users && rObj.users.includes(currentUsername)) {
+        rObj.users = rObj.users.filter(u => u !== currentUsername);
+        rObj.count = rObj.users.length;
+        if (rObj.count === 0) {
+          targetMsg.reactions = targetMsg.reactions.filter(r => r.emoji !== emoji);
+        }
+      } else {
+        if (!rObj.users) rObj.users = [];
+        rObj.users.push(currentUsername);
+        rObj.count = rObj.users.length;
+      }
+    } else {
+      targetMsg.reactions.push({
+        emoji: emoji,
+        count: 1,
+        users: [currentUsername],
+        has_reacted: true
+      });
+    }
+    renderTimeline();
+  }
+
   // Gửi lập tức qua Socket TCP
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
@@ -1654,7 +1686,7 @@ async function toggleReaction(msgId, emoji) {
     });
     const data = await res.json();
     if (res.ok && data.reactions) {
-      const msg = state.messages.find(m => m.id === msgId);
+      const msg = state.messages.find(m => parseInt(m.id) === parseInt(msgId));
       if (msg) {
         msg.reactions = data.reactions;
         renderTimeline();
@@ -3658,7 +3690,7 @@ function handleWebSocketMessage(data) {
       }
     }
   } else if (type === 'reaction_update') {
-    const msg = state.messages.find(m => m.id === data.message_id);
+    const msg = state.messages.find(m => parseInt(m.id) === parseInt(data.message_id));
     if (msg) {
       msg.reactions = data.reactions;
       renderTimeline();
@@ -3668,17 +3700,31 @@ function handleWebSocketMessage(data) {
       }
     }
   } else if (type === 'message_recalled') {
-    const msg = state.messages.find(m => m.id === data.message_id);
+    const msg = state.messages.find(m => parseInt(m.id) === parseInt(data.message_id));
     if (msg) {
       msg.is_recalled = true;
       msg.content = data.content || "Tin nhắn đã được thu hồi";
       renderTimeline();
     }
   } else if (type === 'message_pinned') {
-    if (state.currentConversation) {
+    if (state.currentConversation && (!data.conversation_id || parseInt(state.currentConversation.id) === parseInt(data.conversation_id))) {
       state.currentConversation.pinned_message = data.pinned_message;
+      updatePinnedMessageBanner(data.pinned_message);
     }
-    updatePinnedMessageBanner(data.pinned_message);
+    const c = state.conversations.find(conv => parseInt(conv.id) === parseInt(data.conversation_id));
+    if (c) {
+      c.pinned_message = data.pinned_message;
+    }
+  } else if (type === 'conversation_created') {
+    const conv = data.conversation;
+    if (conv) {
+      if (!state.conversations.some(c => parseInt(c.id) === parseInt(conv.id))) {
+        state.conversations.unshift(conv);
+        renderConversationsList();
+        playNotificationSound();
+        showToast(`🎉 Bạn vừa được thêm vào nhóm: ${conv.title}`);
+      }
+    }
   } else if (type === 'user_status') {
     console.log(`[Presence] Người dùng ${data.display_name} hiện đang ${data.status}`);
   } else if (type === 'user_update') {
