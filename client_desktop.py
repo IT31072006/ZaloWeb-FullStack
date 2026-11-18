@@ -404,6 +404,25 @@ class ZaloTCPClient:
                 elif p_type in ("friend_request_received", "friend_request_accepted"):
                     self._broadcast_to_ui(packet)
 
+                # 8.2 Gói tin cập nhật thông tin người dùng / ảnh đại diện từ máy khác
+                elif p_type == "USER_UPDATE":
+                    u_info = packet.get("user", {})
+                    u_name = u_info.get("username")
+                    if u_name:
+                        for c in self.contacts:
+                            if c.get("username") == u_name:
+                                c["display_name"] = u_info.get("display_name", c.get("display_name"))
+                                c["avatar_url"] = u_info.get("avatar_url", c.get("avatar_url"))
+                                c["phone"] = u_info.get("phone", c.get("phone", ""))
+                        for conv in self.conversations:
+                            if conv.get("other_username") == u_name:
+                                conv["title"] = u_info.get("display_name", conv.get("title"))
+                                conv["avatar_url"] = u_info.get("avatar_url", conv.get("avatar_url"))
+                    self._broadcast_to_ui({
+                        "type": "user_update",
+                        "user": u_info
+                    })
+
                 # 9. Gói tin danh sách người dùng online
                 elif p_type == protocol.MSG_TYPE_USER_LIST:
                     online_users = packet.get("users", [])
@@ -934,6 +953,68 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(ack)
             else:
                 self.send_json({"status": "error", "message": "Máy chủ TCP không phản hồi"}, status=500)
+            return
+
+        # 10. API Cập nhật thông tin cá nhân & Ảnh đại diện (Chuyển tiếp qua TCP Socket UPDATE_PROFILE)
+        elif path == "/api/profile/update/":
+            ctype = self.headers.get("Content-Type", "")
+            display_name = ""
+            bio = ""
+            phone = ""
+            gender = "nam"
+            avatar_b64 = ""
+            avatar_fname = ""
+
+            if "multipart/form-data" in ctype:
+                fields, files = self.parse_form_data()
+                display_name = fields.get("display_name", "").strip()
+                bio = fields.get("bio", "").strip()
+                phone = fields.get("phone", "").strip()
+                gender = fields.get("gender", "nam").strip()
+
+                avatar_item = files.get("avatar")
+                if avatar_item and avatar_item.get("data") and avatar_item.get("filename"):
+                    avatar_fname = avatar_item["filename"]
+                    avatar_bytes = avatar_item["data"]
+                    avatar_b64 = base64.b64encode(avatar_bytes).decode("utf-8")
+
+                    # Lưu file ảnh đại diện vào thư mục media/avatars/ cục bộ
+                    safe_name = f"avatar_{int(time.time())}_{os.path.basename(avatar_fname)}"
+                    abs_av_dir = os.path.join(BASE_DIR, "media", "avatars")
+                    os.makedirs(abs_av_dir, exist_ok=True)
+                    try:
+                        with open(os.path.join(abs_av_dir, safe_name), "wb") as f_out:
+                            f_out.write(avatar_bytes)
+                    except Exception as e:
+                        print(f"[!] Lỗi lưu avatar cục bộ: {e}")
+            else:
+                body = self.read_json_body()
+                display_name = body.get("display_name", "").strip()
+                bio = body.get("bio", "").strip()
+                phone = body.get("phone", "").strip()
+                gender = body.get("gender", "nam").strip()
+
+            pkt = {
+                "type": protocol.MSG_TYPE_UPDATE_PROFILE,
+                "display_name": display_name,
+                "bio": bio,
+                "phone": phone,
+                "gender": gender,
+                "avatar_data": avatar_b64,
+                "avatar_name": avatar_fname,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_UPDATE_PROFILE_ACK, timeout=6.0)
+            if ack and ack.get("status") == "OK":
+                updated_user = ack.get("user") or self.client_bridge.current_user
+                if updated_user:
+                    self.client_bridge.current_user = updated_user
+                self.send_json({
+                    "message": "Cập nhật hồ sơ và ảnh đại diện thành công!",
+                    "user": updated_user
+                })
+            else:
+                err = ack.get("message") if ack else "Máy chủ TCP không phản hồi khi cập nhật hồ sơ!"
+                self.send_json({"error": err}, status=400)
             return
 
         self.send_json({"status": "OK"})

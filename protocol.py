@@ -48,6 +48,8 @@ MSG_TYPE_FRIEND_RESP = "FRIEND_RESP"          # Đồng ý / từ chối lời m
 MSG_TYPE_FRIEND_RESP_ACK = "FRIEND_RESP_ACK"  # Kết quả phản hồi kết bạn
 MSG_TYPE_LOAD_CONTACTS = "LOAD_CONTACTS"      # Tải danh bạ, bạn bè và danh sách lời mời kết bạn
 MSG_TYPE_CONTACTS_ACK = "CONTACTS_ACK"        # Trả về danh bạ bạn bè và lời mời kết bạn
+MSG_TYPE_UPDATE_PROFILE = "UPDATE_PROFILE"    # Cập nhật thông tin cá nhân và ảnh đại diện
+MSG_TYPE_UPDATE_PROFILE_ACK = "UPDATE_PROFILE_ACK"  # Phản hồi cập nhật hồ sơ
 
 # Nhịp tim & Đo độ trễ mạng (Heartbeat / Keep-Alive)
 MSG_TYPE_PING = "PING"                      # Client định kỳ gửi kiểm tra độ trễ và giữ kết nối

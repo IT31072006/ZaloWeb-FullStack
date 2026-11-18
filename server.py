@@ -447,10 +447,13 @@ class ChatServer:
                         "type": protocol.MSG_TYPE_LOGIN_ACK,
                         "status": "OK",
                         "user": {
+                            "id": user_obj.id if user_obj else 0,
                             "username": nickname,
                             "display_name": disp_name,
                             "avatar_url": avatar_url,
                             "phone": phone,
+                            "bio": getattr(user_obj.profile, 'bio', '') if hasattr(user_obj, 'profile') else '',
+                            "gender": getattr(user_obj.profile, 'gender', 'nam') if hasattr(user_obj, 'profile') else 'nam',
                         },
                         "conversations": convs_data,
                         "contacts": contacts_data,
@@ -1408,6 +1411,66 @@ class ChatServer:
                         "friend_requests": incoming_reqs,
                         "timestamp": self.get_timestamp(),
                     })
+
+                # D.13 CẬP NHẬT HỒ SƠ & ẢNH ĐẠI DIỆN QUA SOCKET TCP
+                elif p_type == protocol.MSG_TYPE_UPDATE_PROFILE:
+                    disp_name = packet.get("display_name", "").strip()
+                    bio_val = packet.get("bio", "").strip()
+                    phone_val = packet.get("phone", "").strip()
+                    gender_val = packet.get("gender", "nam").strip()
+                    av_b64 = packet.get("avatar_data", "")
+                    av_fname = packet.get("avatar_name", "")
+                    saved_av_url = ""
+
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if u_curr:
+                        try:
+                            prof, _ = UserProfile.objects.get_or_create(user=u_curr)
+                            if disp_name:
+                                prof.display_name = disp_name
+                            if bio_val:
+                                prof.bio = bio_val
+                            if phone_val:
+                                prof.phone = phone_val
+                            if gender_val:
+                                prof.gender = gender_val
+                            if av_b64 and av_fname:
+                                av_bytes = base64.b64decode(av_b64)
+                                safe_name = f"avatar_{u_curr.id}_{int(time.time())}_{os.path.basename(av_fname)}"
+                                prof.avatar.save(safe_name, ContentFile(av_bytes), save=True)
+                            prof.save()
+
+                            saved_av_url = prof.get_avatar_url()
+                            disp_name = prof.get_display_name()
+                            phone_val = prof.phone
+                            bio_val = prof.bio
+                            gender_val = prof.gender
+                            self._log("PROFILE", f"Người dùng '{nickname}' đã cập nhật hồ sơ & ảnh đại diện mới.")
+                        except Exception as ex:
+                            self._log("ERROR", f"Lỗi lưu hồ sơ vào PostgreSQL: {ex}")
+
+                    user_info = {
+                        "id": u_curr.id if u_curr else 0,
+                        "username": nickname,
+                        "display_name": disp_name or nickname,
+                        "avatar_url": saved_av_url,
+                        "phone": phone_val,
+                        "bio": bio_val,
+                        "gender": gender_val,
+                    }
+
+                    protocol.send_packet(client_sock, {
+                        "type": protocol.MSG_TYPE_UPDATE_PROFILE_ACK,
+                        "status": "OK",
+                        "message": "Cập nhật hồ sơ và ảnh đại diện thành công!",
+                        "user": user_info,
+                    })
+
+                    # Phát tán thông báo cập nhật hồ sơ cho các máy khác trong mạng
+                    self.broadcast({
+                        "type": "USER_UPDATE",
+                        "user": user_info,
+                    }, exclude_sock=client_sock)
 
                 # E. BÁO HIỆU CUỘC GỌI WEBRTC (CALL SIGNALING QUA SOCKET TCP)
                 elif p_type == protocol.MSG_TYPE_CALL_REQ:

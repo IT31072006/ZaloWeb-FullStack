@@ -496,7 +496,7 @@ async function saveProfile() {
 // 2. CONVERSATIONS MANAGEMENT & FILTERS
 // ==============================================================================
 
-async function loadConversations(searchQuery = '') {
+async function loadConversations(searchQuery = '', forceSelect = false) {
   try {
     state.currentSearchQuery = searchQuery;
     let url = '/api/conversations/';
@@ -507,14 +507,20 @@ async function loadConversations(searchQuery = '') {
     renderConversationsList();
 
     if (data.length > 0) {
-      if (!state.currentConversationId) {
+      if (!state.currentConversationId || forceSelect) {
         const defaultConv = data.find(c => c.title.includes('Cloud')) || data[0];
         selectConversation(defaultConv.id);
       } else {
         const exists = data.find(c => c.id === state.currentConversationId);
-        if (exists) selectConversation(exists.id);
+        if (exists) {
+          state.currentConversation = exists;
+          const chatTitle = document.getElementById('currentChatTitle');
+          if (chatTitle && exists.title) chatTitle.innerText = exists.title;
+        } else {
+          selectConversation(data[0].id);
+        }
       }
-    } else {
+    } else if (!state.currentConversationId) {
       // Nếu chưa có hội thoại nào, mở Cloud của tôi
       openMyCloud();
     }
@@ -1091,8 +1097,10 @@ function renderSkeletonTimeline() {
   `;
 }
 
-async function loadMessages(convId) {
-  renderSkeletonTimeline();
+async function loadMessages(convId, showSkeleton = true) {
+  if (showSkeleton && state.messages.length === 0) {
+    renderSkeletonTimeline();
+  }
   try {
     const res = await fetch(`/api/conversations/${convId}/messages/`);
     const data = await res.json();
@@ -1815,10 +1823,21 @@ function copyMessageContent(msgId) {
   }
 }
 
-function scrollChatToBottom() {
+function scrollChatToBottom(smooth = false) {
   const timeline = document.getElementById('chatTimeline');
   if (timeline) {
-    timeline.scrollTop = timeline.scrollHeight;
+    if (smooth) {
+      timeline.scrollTo({ top: timeline.scrollHeight, behavior: 'smooth' });
+    } else {
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+    // Giữ màn hình luôn cuộn sát đáy xem tin mới nhất, không bị nhích lên
+    requestAnimationFrame(() => {
+      timeline.scrollTop = timeline.scrollHeight;
+    });
+    setTimeout(() => {
+      timeline.scrollTop = timeline.scrollHeight;
+    }, 40);
   }
 }
 
@@ -3662,6 +3681,33 @@ function handleWebSocketMessage(data) {
     updatePinnedMessageBanner(data.pinned_message);
   } else if (type === 'user_status') {
     console.log(`[Presence] Người dùng ${data.display_name} hiện đang ${data.status}`);
+  } else if (type === 'user_update') {
+    const u = data.user;
+    if (u) {
+      if (state.currentUser && state.currentUser.username === u.username) {
+        state.currentUser = { ...state.currentUser, ...u };
+        updateUserUI();
+      }
+      const c = state.conversations.find(conv => conv.other_username === u.username);
+      if (c) {
+        c.title = u.display_name || c.title;
+        c.avatar_url = u.avatar_url || c.avatar_url;
+        renderConversationsList();
+      }
+      if (state.currentConversation && state.currentConversation.other_username === u.username) {
+        const chatTitle = document.getElementById('currentChatTitle');
+        if (chatTitle && u.display_name) chatTitle.innerText = u.display_name;
+        const chatAv = document.getElementById('currentChatAvatar');
+        if (chatAv && u.avatar_url) chatAv.src = u.avatar_url;
+      }
+      const contact = state.contacts.find(ct => ct.username === u.username);
+      if (contact) {
+        contact.display_name = u.display_name || contact.display_name;
+        contact.avatar_url = u.avatar_url || contact.avatar_url;
+        contact.phone = u.phone || contact.phone;
+        renderContactsList();
+      }
+    }
   } else if (type === 'friend_request_received') {
     showToast(`🔔 ${data.data?.display_name || 'Ai đó'} vừa gửi lời mời kết bạn cho bạn!`, 6000);
     playNotificationSound();
