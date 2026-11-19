@@ -1562,6 +1562,7 @@ function sendMarkRead(messageId) {
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
       type: 'mark_read',
+      conversation_id: state.currentConversationId,
       last_message_id: messageId
     }));
   }
@@ -4114,6 +4115,7 @@ async function logCallRecord(callType, callStatus, duration, callerId) {
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
       type: 'call_log',
+      conversation_id: state.currentConversationId,
       ...payload
     }));
   } else {
@@ -4174,6 +4176,7 @@ async function startWebRTCCall(callType) {
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
       action: 'call_request',
+      conversation_id: state.currentConversationId,
       call_type: callType,
       sender_id: state.currentUser?.id,
       sender_name: state.currentUser?.display_name || "Bạn bè Zalo",
@@ -4237,9 +4240,11 @@ async function acceptIncomingCall() {
     if (localVideo) localVideo.srcObject = stream;
 
     // Gửi tín hiệu chấp nhận cuộc gọi
+    const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
-      action: 'call_accept'
+      action: 'call_accept',
+      conversation_id: activeConvId
     }));
 
     startCallTimer();
@@ -4258,11 +4263,13 @@ function declineIncomingCall() {
   const signal = state.pendingIncomingSignal;
   const callType = signal?.call_type || state.currentCallType || 'voice';
   const callerId = signal?.sender_id || state.callInitiatorId;
+  const activeConvId = state.currentConversationId || signal?.conversation_id;
 
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
-      action: 'call_reject'
+      action: 'call_reject',
+      conversation_id: activeConvId
     }));
   }
 
@@ -4325,9 +4332,11 @@ function createPeerConnection() {
 
   pc.onicecandidate = (event) => {
     if (event.candidate && state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+      const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
       state.chatSocket.send(JSON.stringify({
         type: 'webrtc_signal',
         action: 'ice_candidate',
+        conversation_id: activeConvId,
         candidate: event.candidate
       }));
     }
@@ -4386,12 +4395,14 @@ async function handleWebRTCSignalMessage(data) {
     const stageStatus = document.getElementById('callStageStatusText');
     if (stageStatus) stageStatus.innerText = "Đối phương đã nhận lời, đang thiết lập kênh P2P...";
 
+    const activeConvId = state.currentConversationId || data.conversation_id;
     const pc = createPeerConnection();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
       action: 'offer',
+      conversation_id: activeConvId,
       sdp: pc.localDescription
     }));
     startCallTimer();
@@ -4400,6 +4411,7 @@ async function handleWebRTCSignalMessage(data) {
     showToast("Đối phương đã từ chối cuộc gọi.");
     endWebRTCCall(false);
   } else if (action === 'offer') {
+    const activeConvId = state.currentConversationId || data.conversation_id;
     const pc = createPeerConnection();
     await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
     await flushIceCandidatesQueue();
@@ -4409,6 +4421,7 @@ async function handleWebRTCSignalMessage(data) {
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
       action: 'answer',
+      conversation_id: activeConvId,
       sdp: pc.localDescription
     }));
   } else if (action === 'answer') {
@@ -4524,9 +4537,11 @@ function toggleCallMic() {
 
   // 4. Notify peer through WebSocket signaling
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
       action: 'peer_mic_toggle',
+      conversation_id: activeConvId,
       is_muted: state.isMicMuted
     }));
   }
@@ -4620,9 +4635,11 @@ async function toggleCallCam() {
 
   // 4. Notify peer through WebSocket signaling
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+    const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
     state.chatSocket.send(JSON.stringify({
       type: 'webrtc_signal',
       action: 'peer_cam_toggle',
+      conversation_id: activeConvId,
       is_cam_off: state.isCamOff
     }));
   }
@@ -4685,10 +4702,12 @@ function endWebRTCCall(sendSignal = true) {
   const callStatus = state.callConnected ? 'completed' : 'missed';
 
   if (sendSignal) {
+    const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
     if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
       state.chatSocket.send(JSON.stringify({
         type: 'webrtc_signal',
-        action: 'call_end'
+        action: 'call_end',
+        conversation_id: activeConvId
       }));
     }
     // Ghi nhận lịch sử cuộc gọi vào hội thoại
@@ -4800,9 +4819,11 @@ async function toggleScreenShare() {
     }
 
     if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+      const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
       state.chatSocket.send(JSON.stringify({
         type: 'webrtc_signal',
-        action: 'screen_share_stop'
+        action: 'screen_share_stop',
+        conversation_id: activeConvId
       }));
     }
     showToast("Đã dừng chia sẻ màn hình.");
@@ -4837,9 +4858,11 @@ async function toggleScreenShare() {
       if (btn) btn.classList.add('screen-share-active');
 
       if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
+        const activeConvId = state.currentConversationId || state.pendingIncomingSignal?.conversation_id;
         state.chatSocket.send(JSON.stringify({
           type: 'webrtc_signal',
           action: 'screen_share_start',
+          conversation_id: activeConvId,
           sender_name: state.currentUser?.display_name || 'Đối phương'
         }));
       }

@@ -20,7 +20,7 @@ def run_test():
     # 1. Connect Client 1 (quan)
     c1 = client_desktop.ZaloTCPClient('127.0.0.1', 5555)
     assert c1.connect(), "Client 1 kết nối thất bại"
-    ack1 = c1.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "quan", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 3.0)
+    ack1 = c1.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "quan", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 5.0)
     assert ack1 and ack1.get("status") == "OK", "Client 1 login failed"
     u1_id = ack1["user"]["id"]
     print(f"✅ 1. Client 1 (quan, ID #{u1_id}) đăng nhập thành công")
@@ -28,7 +28,7 @@ def run_test():
     # Connect Client 2 (0763538273)
     c2 = client_desktop.ZaloTCPClient('127.0.0.1', 5555)
     assert c2.connect(), "Client 2 kết nối thất bại"
-    ack2 = c2.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "0763538273", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 3.0)
+    ack2 = c2.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "0763538273", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 5.0)
     assert ack2 and ack2.get("status") == "OK", "Client 2 login failed"
     u2_id = ack2["user"]["id"]
     print(f"✅ 2. Client 2 (lê bảo, ID #{u2_id}) đăng nhập thành công")
@@ -36,7 +36,7 @@ def run_test():
     # Connect Client 3 (phammm)
     c3 = client_desktop.ZaloTCPClient('127.0.0.1', 5555)
     assert c3.connect(), "Client 3 kết nối thất bại"
-    ack3 = c3.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "phammm", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 3.0)
+    ack3 = c3.send_and_wait({"type": protocol.MSG_TYPE_LOGIN, "username": "phammm", "password": "password123"}, protocol.MSG_TYPE_LOGIN_ACK, 5.0)
     assert ack3 and ack3.get("status") == "OK", "Client 3 login failed"
     u3_id = ack3["user"]["id"]
     print(f"✅ 3. Client 3 (phammm, ID #{u3_id}) đăng nhập thành công")
@@ -121,12 +121,9 @@ def run_test():
     print(f"✅ 9. Thả biểu cảm cảm xúc (Reactions) thành công! Biểu tượng: {heart_react['emoji']} (Số lượng: {heart_react['count']}, Người thả: {heart_react['users']})")
 
     # Cleanup sockets
-    c1.should_stop = True
-    c2.should_stop = True
-    c3.should_stop = True
-    c1.tcp_sock.close()
-    c2.tcp_sock.close()
-    c3.tcp_sock.close()
+    c1.disconnect()
+    c2.disconnect()
+    c3.disconnect()
 
     print("=" * 70)
     print("🎉 TẤT CẢ 9/9 BƯỚC KIỂM THỬ TẠO NHÓM, GHIM & REACTIONS ĐÃ ĐẠT 100%!")

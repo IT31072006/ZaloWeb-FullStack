@@ -74,6 +74,12 @@ MSG_TYPE_FORWARD_MESSAGE = "FORWARD_MESSAGE"            # Chuyển tiếp tin nh
 MSG_TYPE_FORWARD_MESSAGE_ACK = "FORWARD_MESSAGE_ACK"    # Kết quả chuyển tiếp tin nhắn
 MSG_TYPE_DELETE_FOR_ME = "DELETE_FOR_ME"                # Xóa tin nhắn ở phía tôi (ẩn trong CSDL)
 MSG_TYPE_DELETE_FOR_ME_ACK = "DELETE_FOR_ME_ACK"        # Xác nhận xóa tin nhắn ở phía tôi
+MSG_TYPE_READ_RECEIPT = "READ_RECEIPT"                  # Đánh dấu đã đọc / đã xem tin nhắn
+MSG_TYPE_READ_RECEIPT_ACK = "READ_RECEIPT_ACK"          # Xác nhận đã đọc tin nhắn
+
+# Quản lý Công việc & Giao việc (Zalo To-Do & Task Management)
+MSG_TYPE_TASK_OP = "TASK_OP"                            # Thao tác công việc (list, create, toggle, delete)
+MSG_TYPE_TASK_OP_ACK = "TASK_OP_ACK"                    # Kết quả thao tác công việc trả về danh sách task
 
 # Nhịp tim & Đo độ trễ mạng (Heartbeat / Keep-Alive)
 MSG_TYPE_PING = "PING"                      # Client định kỳ gửi kiểm tra độ trễ và giữ kết nối

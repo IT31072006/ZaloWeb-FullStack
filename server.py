@@ -31,7 +31,7 @@ try:
     from django.contrib.auth.models import User
     from django.core.files.base import ContentFile
     from django.db import models
-    from chat.models import UserProfile, Conversation, ConversationMember, Message, MessageReaction, Friendship, FriendRequest
+    from chat.models import UserProfile, Conversation, ConversationMember, Message, MessageReaction, Friendship, FriendRequest, Task
     HAS_DJANGO = True
     print("[*] [SERVER] Đã kết nối thành công Cơ sở dữ liệu PostgreSQL (Django ORM).")
 except Exception as e:
@@ -153,6 +153,7 @@ class ChatServer:
                 "display_name": mp.get_display_name() if mp else m_u.username,
                 "avatar_url": mp.get_avatar_url() if mp else "",
                 "role": mem.role,
+                "last_read_message_id": mem.last_read_message_id,
                 "is_online": (m_u.username in self.clients_by_name)
             })
 
@@ -2355,7 +2356,164 @@ class ChatServer:
                             "message": f"Lỗi xóa tin nhắn: {e}"
                         })
 
-                # E. BÁO HIỆU CUỘC GỌI WEBRTC (CALL SIGNALING QUA SOCKET TCP)
+                # ==============================================================================
+                # NHÓM 3: TRẠNG THÁI "ĐÃ XEM" (READ RECEIPTS) & ZALO TO-DO / TASK
+                # ==============================================================================
+
+                # 1. Đánh dấu đã đọc / đã xem tin nhắn (READ_RECEIPT / mark_read)
+                elif p_type in (protocol.MSG_TYPE_READ_RECEIPT, "mark_read"):
+                    conv_id = packet.get("conversation_id")
+                    last_msg_id = packet.get("last_message_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if HAS_DJANGO and u_curr and conv_id:
+                        try:
+                            c_obj = Conversation.objects.filter(id=int(conv_id), memberships__user=u_curr).first()
+                            if c_obj:
+                                mem = c_obj.memberships.filter(user=u_curr).first()
+                                if mem:
+                                    if last_msg_id:
+                                        mem.last_read_message_id = max(mem.last_read_message_id, int(last_msg_id))
+                                    else:
+                                        latest = c_obj.messages.last()
+                                        if latest:
+                                            mem.last_read_message_id = max(mem.last_read_message_id, latest.id)
+                                    mem.save(update_fields=['last_read_message_id'])
+
+                                    disp_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                                    av_url = u_curr.profile.get_avatar_url() if hasattr(u_curr, 'profile') else ""
+                                    rr_packet = {
+                                        "type": "read_receipt",
+                                        "conversation_id": c_obj.id,
+                                        "user_id": u_curr.id,
+                                        "username": u_curr.username,
+                                        "sender": u_curr.username,
+                                        "display_name": disp_name,
+                                        "avatar_url": av_url,
+                                        "last_read_message_id": mem.last_read_message_id,
+                                        "timestamp": self.get_timestamp(),
+                                    }
+                                    # Phát tán gói tin Đã xem (Read Receipt) cho tất cả thành viên khác trong hội thoại
+                                    for m in c_obj.memberships.exclude(user=u_curr).select_related('user').all():
+                                        with self.lock:
+                                            sock = self.clients_by_name.get(m.user.username)
+                                        if sock:
+                                            protocol.send_packet(sock, rr_packet)
+
+                                    protocol.send_packet(client_sock, {
+                                        "type": protocol.MSG_TYPE_READ_RECEIPT_ACK,
+                                        "status": "OK",
+                                        "conversation_id": c_obj.id,
+                                        "last_read_message_id": mem.last_read_message_id,
+                                    })
+                                    self._log("READ", f"'{nickname}' đã xem tin nhắn đến ID #{mem.last_read_message_id} trong [{c_obj.name or c_obj.id}]")
+                        except Exception as ex:
+                            self._log("ERROR", f"Lỗi cập nhật read receipt: {ex}")
+
+                # 2. Quản lý công việc & việc cần làm (TASK_OP)
+                elif p_type == protocol.MSG_TYPE_TASK_OP:
+                    action = packet.get("action", "list")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_TASK_OP_ACK,
+                            "status": "ERROR",
+                            "message": "Chưa đăng nhập."
+                        })
+                        continue
+                    try:
+                        # Khởi tạo công việc mẫu nếu chưa có
+                        if not Task.objects.filter(user=u_curr).exists():
+                            Task.objects.create(user=u_curr, title='Hoàn thành bài tập lớn Lập trình Mạng: Zalo Web Full-Stack', due='23:59 Hôm nay', priority='high', done=False)
+                            Task.objects.create(user=u_curr, title='Ôn tập kiến thức Socket TCP/IP và UDP Multicast (Lab 6)', due='Ngày mai', priority='medium', done=False)
+                            Task.objects.create(user=u_curr, title='Nộp báo cáo giữa kỳ môn LTM cho cô Camnt', due='25/10/2026', priority='high', done=False)
+                            Task.objects.create(user=u_curr, title='Chuẩn bị slide thuyết trình demo ứng dụng Zalo Desktop', due='Tuần tới', priority='normal', done=True)
+
+                        if action == 'toggle':
+                            t_id = packet.get("id")
+                            t_obj = Task.objects.filter(id=t_id, user=u_curr).first()
+                            if t_obj:
+                                t_obj.done = not t_obj.done
+                                t_obj.save(update_fields=['done', 'updated_at'])
+                        elif action == 'create':
+                            t_title = packet.get("title", "").strip()
+                            t_due = packet.get("due", "Sắp tới").strip() or "Sắp tới"
+                            t_prio = packet.get("priority", "medium")
+                            t_conv_id = packet.get("conversation_id")
+                            t_conv = Conversation.objects.filter(id=t_conv_id, memberships__user=u_curr).first() if t_conv_id else None
+                            if t_title:
+                                Task.objects.create(user=u_curr, title=t_title, due=t_due, priority=t_prio, conversation=t_conv)
+                        elif action == 'delete':
+                            t_id = packet.get("id")
+                            Task.objects.filter(id=t_id, user=u_curr).delete()
+
+                        all_tasks = Task.objects.filter(user=u_curr).order_by('done', '-created_at')
+                        tasks_data = [{
+                            'id': t.id,
+                            'title': t.title,
+                            'due': t.due,
+                            'priority': t.priority,
+                            'done': t.done,
+                            'conversation_id': t.conversation_id,
+                            'conversation_title': t.conversation.name if t.conversation else None,
+                            'created_at': t.created_at.strftime("%d/%m/%Y %H:%M")
+                        } for t in all_tasks]
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_TASK_OP_ACK,
+                            "status": "OK",
+                            "tasks": tasks_data,
+                        })
+                        self._log("TASK", f"'{nickname}' thực hiện thao tác công việc: {action} (Tổng: {len(tasks_data)} tasks)")
+                    except Exception as ex:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_TASK_OP_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi thao tác công việc: {ex}"
+                        })
+
+                # ==============================================================================
+                # NHÓM 4: BÁO HIỆU CUỘC GỌI WEBRTC P2P VOICE/VIDEO (CALL SIGNALING)
+                # ==============================================================================
+
+                # 1. Tín hiệu WebRTC Signal thống nhất (webrtc_signal: call_request, call_accept, call_reject, offer, answer, ice_candidate, call_end)
+                elif p_type in (protocol.MSG_TYPE_CALL_SIGNAL, "webrtc_signal"):
+                    conv_id = packet.get("conversation_id")
+                    target_user = packet.get("target", "").strip()
+                    action = packet.get("action", "")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+
+                    # Gán thông tin người gửi chuẩn hóa
+                    packet["sender"] = nickname
+                    packet["sender_id"] = u_curr.id if u_curr else 0
+                    packet["sender_name"] = u_curr.profile.get_display_name() if (u_curr and hasattr(u_curr, 'profile')) else nickname
+                    packet["sender_avatar"] = u_curr.profile.get_avatar_url() if (u_curr and hasattr(u_curr, 'profile')) else ""
+                    packet["timestamp"] = self.get_timestamp()
+
+                    target_sockets = []
+                    if target_user:
+                        with self.lock:
+                            s = self.clients_by_name.get(target_user)
+                        if s:
+                            target_sockets.append(s)
+                    elif conv_id and HAS_DJANGO:
+                        try:
+                            c_obj = Conversation.objects.filter(id=int(conv_id)).first()
+                            if c_obj:
+                                for mem in c_obj.memberships.exclude(user__username=nickname).select_related('user').all():
+                                    with self.lock:
+                                        s = self.clients_by_name.get(mem.user.username)
+                                    if s:
+                                        target_sockets.append(s)
+                        except Exception:
+                            pass
+
+                    # Chuyển tiếp gói tin tín hiệu WebRTC cho các bên liên quan
+                    for s in target_sockets:
+                        protocol.send_packet(s, packet)
+
+                    self._log("WEBRTC", f"'{nickname}' -> {action} tới {len(target_sockets)} peer(s)")
+
+                # 2. Khung báo hiệu cuộc gọi cũ (CALL_REQ)
                 elif p_type == protocol.MSG_TYPE_CALL_REQ:
                     target_user = packet.get("target", "").strip()
                     conv_id = packet.get("conversation_id")
@@ -2406,55 +2564,72 @@ class ChatServer:
                         protocol.send_packet(caller_sock, resp_packet)
                         self._log("CALL_RESP", f"'{nickname}' phản hồi cuộc gọi từ '{caller}': {status}")
 
-                elif p_type == protocol.MSG_TYPE_CALL_SIGNAL:
-                    target_peer = packet.get("target", "").strip()
-                    with self.lock:
-                        peer_sock = self.clients_by_name.get(target_peer)
-                    if peer_sock:
-                        signal_packet = {
-                            "type": protocol.MSG_TYPE_CALL_SIGNAL,
-                            "sender": nickname,
-                            "signal_data": packet.get("signal_data"),
-                            "timestamp": self.get_timestamp(),
-                        }
-                        protocol.send_packet(peer_sock, signal_packet)
-
-                elif p_type == protocol.MSG_TYPE_CALL_END:
+                # 3. Ghi nhận lịch sử cuộc gọi (CALL_END hoặc call_log)
+                elif p_type in (protocol.MSG_TYPE_CALL_END, "call_log"):
                     peer_user = packet.get("peer", "").strip()
                     conv_id = packet.get("conversation_id")
-                    duration = packet.get("duration", 0)
+                    duration = int(packet.get("duration") or packet.get("call_duration") or 0)
                     call_status = packet.get("call_status", "completed")
+                    call_type = packet.get("call_type", "video")
 
-                    # Ghi nhận lịch sử cuộc gọi vào CSDL PostgreSQL
-                    if HAS_DJANGO and conv_id:
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if HAS_DJANGO and conv_id and u_curr:
                         try:
-                            c_obj = Conversation.objects.get(id=conv_id)
-                            u_sender = User.objects.get(username=nickname)
-                            m_dur = f"{duration // 60:02d}:{duration % 60:02d}"
-                            content_str = f"Cuộc gọi video ({m_dur})" if duration > 0 else "Cuộc gọi nhỡ"
-                            m_obj = Message.objects.create(
-                                conversation=c_obj,
-                                sender=u_sender,
-                                message_type='call',
-                                content=content_str,
-                                call_duration=duration,
-                                call_status=call_status,
-                            )
-                            c_obj.save(update_fields=['updated_at'])
-                            self._log("CALL_LOG", f"Đã lưu lịch sử cuộc gọi vào PostgreSQL: {content_str}")
+                            c_obj = Conversation.objects.filter(id=int(conv_id)).first()
+                            if c_obj:
+                                mins = duration // 60
+                                secs = duration % 60
+                                dur_str = f"{mins:02d}:{secs:02d}"
+                                if call_status == 'completed':
+                                    content_str = f"Cuộc gọi { 'video' if call_type == 'video' else 'thoại' } ({dur_str})"
+                                elif call_status == 'missed':
+                                    content_str = "Cuộc gọi nhỡ"
+                                elif call_status == 'rejected':
+                                    content_str = "Cuộc gọi bị từ chối"
+                                else:
+                                    content_str = "Cuộc gọi kết thúc"
+
+                                m_obj = Message.objects.create(
+                                    conversation=c_obj,
+                                    sender=u_curr,
+                                    message_type='call',
+                                    content=content_str,
+                                    code_language=call_type,
+                                    call_duration=duration,
+                                    call_status=call_status,
+                                )
+                                c_obj.save(update_fields=['updated_at'])
+                                time_str = self.format_local_time(m_obj.created_at)
+
+                                call_pkt = {
+                                    "type": protocol.MSG_TYPE_CHAT,
+                                    "conversation_id": c_obj.id,
+                                    "message_id": m_obj.id,
+                                    "id": m_obj.id,
+                                    "sender": nickname,
+                                    "sender_name": u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else nickname,
+                                    "sender_avatar": u_curr.profile.get_avatar_url() if hasattr(u_curr, 'profile') else "",
+                                    "is_me": False,
+                                    "message_type": "call",
+                                    "content": content_str,
+                                    "code_language": call_type,
+                                    "call_duration": duration,
+                                    "call_status": call_status,
+                                    "formatted_duration": dur_str,
+                                    "timestamp": time_str,
+                                    "formatted_time": time_str,
+                                    "created_at": m_obj.created_at.isoformat(),
+                                    "is_recalled": False,
+                                    "reactions": [],
+                                }
+                                for mem in c_obj.memberships.select_related('user').all():
+                                    with self.lock:
+                                        sock = self.clients_by_name.get(mem.user.username)
+                                    if sock:
+                                        protocol.send_packet(sock, call_pkt)
+                                self._log("CALL_LOG", f"Đã lưu lịch sử cuộc gọi vào PostgreSQL: {content_str}")
                         except Exception as ex:
                             self._log("ERROR", f"Lỗi lưu lịch sử cuộc gọi DB: {ex}")
-
-                    with self.lock:
-                        peer_sock = self.clients_by_name.get(peer_user)
-                    if peer_sock:
-                        protocol.send_packet(peer_sock, {
-                            "type": protocol.MSG_TYPE_CALL_END,
-                            "sender": nickname,
-                            "conversation_id": conv_id,
-                            "duration": duration,
-                            "timestamp": self.get_timestamp(),
-                        })
 
                 # F. Danh sách thành viên online
                 elif p_type == protocol.MSG_TYPE_USER_LIST:

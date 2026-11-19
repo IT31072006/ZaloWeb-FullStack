@@ -353,6 +353,10 @@ class ZaloTCPClient:
                         "created_at": datetime.datetime.now().isoformat(),
                         "is_recalled": False,
                         "reactions": [],
+                        "call_duration": packet.get("call_duration", 0),
+                        "call_status": packet.get("call_status", ""),
+                        "formatted_duration": packet.get("formatted_duration", ""),
+                        "code_language": packet.get("code_language", ""),
                     }
                     if conv_id not in self.messages_cache:
                         self.messages_cache[conv_id] = []
@@ -457,6 +461,24 @@ class ZaloTCPClient:
                 elif p_type in ("group_removed", "group_disbanded"):
                     conv_id = packet.get("conversation_id")
                     self.conversations = [c for c in self.conversations if c.get("id") != conv_id]
+                    self._broadcast_to_ui(packet)
+
+                # 8.7 Gói tin Đã xem tin nhắn (Read Receipt)
+                elif p_type in ("read_receipt", protocol.MSG_TYPE_READ_RECEIPT):
+                    conv_id = packet.get("conversation_id")
+                    u_id = packet.get("user_id")
+                    u_name = packet.get("sender") or packet.get("username")
+                    last_id = packet.get("last_read_message_id", 0)
+                    for c in self.conversations:
+                        if c.get("id") == conv_id and "members" in c:
+                            for m in c["members"]:
+                                if m.get("id") == u_id or m.get("username") == u_name:
+                                    m["last_read_message_id"] = max(m.get("last_read_message_id", 0), last_id)
+                                    break
+                    self._broadcast_to_ui(packet)
+
+                # 8.8 Gói tin Báo hiệu cuộc gọi WebRTC Voice/Video P2P (Call Signaling)
+                elif p_type in ("webrtc_signal", protocol.MSG_TYPE_CALL_SIGNAL):
                     self._broadcast_to_ui(packet)
 
                 # 9. Gói tin danh sách người dùng online
@@ -701,9 +723,12 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json({"error": "Không thể mở Cloud của tôi"}, status=500)
             return
 
-        # 11. API To-do / Tasks
+        # 11. API Quản lý công việc To-do / Tasks (Qua Socket TCP)
         elif path == "/api/tasks/":
-            self.send_json([])
+            pkt = {"type": protocol.MSG_TYPE_TASK_OP, "action": "list"}
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_TASK_OP_ACK, timeout=5.0)
+            tasks = ack.get("tasks", []) if ack else []
+            self.send_json(tasks)
             return
 
         # Fallback file không tìm thấy
@@ -1282,6 +1307,50 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 })
             else:
                 self.send_json({"error": ack.get("message") if ack else "Không thể xóa tin nhắn"}, status=400)
+            return
+
+        # 19. API Quản lý công việc To-Do Tasks (POST /api/tasks/)
+        elif path == "/api/tasks/":
+            body = self.read_json_body()
+            pkt = {
+                "type": protocol.MSG_TYPE_TASK_OP,
+                **body
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_TASK_OP_ACK, timeout=5.0)
+            tasks = ack.get("tasks", []) if ack else []
+            self.send_json(tasks)
+            return
+
+        # 20. API Đánh dấu đã xem tin nhắn (POST /api/conversations/<id>/mark_read/)
+        elif path.startswith("/api/conversations/") and path.endswith("/mark_read/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            last_msg_id = body.get("last_message_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_READ_RECEIPT,
+                "conversation_id": conv_id,
+                "last_message_id": last_msg_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_READ_RECEIPT_ACK, timeout=4.0)
+            self.send_json({
+                "success": True,
+                "last_read_message_id": ack.get("last_read_message_id") if ack else last_msg_id
+            })
+            return
+
+        # 21. API Lưu lịch sử cuộc gọi (POST /api/conversations/<id>/log_call/)
+        elif path.startswith("/api/conversations/") and path.endswith("/log_call/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            pkt = {
+                "type": "call_log",
+                "conversation_id": conv_id,
+                **body
+            }
+            self.client_bridge.send_tcp_packet(pkt)
+            self.send_json({"status": "OK"})
             return
 
         self.send_json({"status": "OK"})
