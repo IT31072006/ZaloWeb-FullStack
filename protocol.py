@@ -77,6 +77,10 @@ MSG_TYPE_DELETE_FOR_ME_ACK = "DELETE_FOR_ME_ACK"        # Xác nhận xóa tin n
 MSG_TYPE_READ_RECEIPT = "READ_RECEIPT"                  # Đánh dấu đã đọc / đã xem tin nhắn
 MSG_TYPE_READ_RECEIPT_ACK = "READ_RECEIPT_ACK"          # Xác nhận đã đọc tin nhắn
 
+# Ghim hội thoại, Tắt thông báo, Ưu tiên (Conversation Settings & State)
+MSG_TYPE_CONV_ACTION = "CONV_ACTION"                      # Ghim/Tắt thông báo/Ưu tiên hội thoại (action: toggle_pin, toggle_mute, toggle_priority)
+MSG_TYPE_CONV_ACTION_ACK = "CONV_ACTION_ACK"              # Kết quả thao tác hội thoại
+
 # Quản lý Công việc & Giao việc (Zalo To-Do & Task Management)
 MSG_TYPE_TASK_OP = "TASK_OP"                            # Thao tác công việc (list, create, toggle, delete)
 MSG_TYPE_TASK_OP_ACK = "TASK_OP_ACK"                    # Kết quả thao tác công việc trả về danh sách task

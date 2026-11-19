@@ -578,34 +578,6 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(cleaned)
             return
 
-        # 7. API Lấy thông tin 1 Hội thoại
-        elif path.startswith("/api/conversations/") and not path.endswith("/messages/"):
-            parts = [p for p in path.split("/") if p]
-            if len(parts) >= 3 and parts[2].isdigit():
-                conv_id = int(parts[2])
-                conv = next((c for c in self.client_bridge.conversations if c.get("id") == conv_id), None)
-                if conv:
-                    c_copy = dict(conv)
-                    c_title = c_copy.get("title") or c_copy.get("name") or "Hội thoại"
-                    c_copy["title"] = c_title
-                    c_copy["name"] = c_title
-                    if "members" not in c_copy:
-                        curr_u = self.client_bridge.current_user or {}
-                        c_copy["members"] = [
-                            {
-                                "id": 1,
-                                "username": curr_u.get("username", "user"),
-                                "display_name": curr_u.get("display_name", "Tôi"),
-                                "avatar_url": curr_u.get("avatar_url", ""),
-                                "role": "admin",
-                                "is_online": True,
-                            }
-                        ]
-                    self.send_json(c_copy)
-                    return
-            self.send_json({"error": "Không tìm thấy hội thoại"}, status=404)
-            return
-
         # 7.1 API Đồng bộ tin nhắn mới (Fallback khi WebSocket gặp sự cố mạng)
         elif path.startswith("/api/conversations/") and "/sync/" in path:
             parts = [p for p in path.split("/") if p]
@@ -630,7 +602,26 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(new_msgs)
             return
 
-        # 8. API Lịch sử tin nhắn một cuộc trò chuyện (Truy vấn qua TCP Socket)
+        # 7.2 API Tìm kiếm tin nhắn trong hội thoại
+        elif path.startswith("/api/conversations/") and "/search/" in path:
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            q_str = query.get("q", [""])[0].strip().lower()
+            all_msgs = self.client_bridge.messages_cache.get(conv_id, [])
+            if not all_msgs and conv_id:
+                pkt = {"type": protocol.MSG_TYPE_LOAD_HISTORY, "conversation_id": conv_id}
+                ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_HISTORY_ACK, timeout=4.0)
+                all_msgs = ack.get("messages", []) if ack else []
+            matched = []
+            for m in all_msgs:
+                c_txt = (m.get("content") or "").lower()
+                att_txt = (m.get("attachment_name") or "").lower()
+                if q_str in c_txt or q_str in att_txt:
+                    matched.append(m)
+            self.send_json(matched)
+            return
+
+        # 7.3 API Lịch sử tin nhắn một cuộc trò chuyện (Truy vấn qua TCP Socket)
         elif path.startswith("/api/conversations/") and path.endswith("/messages/"):
             parts = [p for p in path.split("/") if p]
             if len(parts) >= 4 and parts[2].isdigit():
@@ -651,6 +642,60 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(msgs)
                 return
             self.send_json([])
+            return
+
+        # 7.4 API Lấy thông tin 1 Hội thoại (Kèm media & files cho sidebar phải)
+        elif path.startswith("/api/conversations/") and len([p for p in path.split("/") if p]) == 3:
+            parts = [p for p in path.split("/") if p]
+            if parts[2].isdigit():
+                conv_id = int(parts[2])
+                conv = next((c for c in self.client_bridge.conversations if c.get("id") == conv_id), None)
+                if conv:
+                    c_copy = dict(conv)
+                    c_title = c_copy.get("title") or c_copy.get("name") or "Hội thoại"
+                    c_copy["title"] = c_title
+                    c_copy["name"] = c_title
+                    if "members" not in c_copy:
+                        curr_u = self.client_bridge.current_user or {}
+                        c_copy["members"] = [
+                            {
+                                "id": 1,
+                                "username": curr_u.get("username", "user"),
+                                "display_name": curr_u.get("display_name", "Tôi"),
+                                "avatar_url": curr_u.get("avatar_url", ""),
+                                "role": "admin",
+                                "is_online": True,
+                            }
+                        ]
+                    if "shared_media" not in c_copy or not c_copy["shared_media"]:
+                        c_copy["shared_media"] = [
+                            {
+                                "id": m["id"],
+                                "type": m.get("message_type", "image"),
+                                "url": m.get("attachment_url", ""),
+                                "name": m.get("attachment_name") or m.get("content", ""),
+                                "sender": m.get("sender_name", ""),
+                                "created_at": m.get("formatted_time", "")
+                            }
+                            for m in self.client_bridge.messages_cache.get(conv_id, [])
+                            if m.get("message_type") in ("image", "video", "audio") and m.get("attachment_url")
+                        ]
+                    if "shared_files" not in c_copy or not c_copy["shared_files"]:
+                        c_copy["shared_files"] = [
+                            {
+                                "id": m["id"],
+                                "name": m.get("attachment_name") or "Tệp tin",
+                                "size": m.get("attachment_size") or "0 B",
+                                "url": m.get("attachment_url", ""),
+                                "sender": m.get("sender_name", ""),
+                                "created_at": m.get("formatted_time", "")
+                            }
+                            for m in self.client_bridge.messages_cache.get(conv_id, [])
+                            if m.get("message_type") == "file" and m.get("attachment_url")
+                        ]
+                    self.send_json(c_copy)
+                    return
+            self.send_json({"error": "Không tìm thấy hội thoại"}, status=404)
             return
 
         # 8.1 API Tìm kiếm người dùng bằng Số điện thoại (Zalo Web Search by Phone)
@@ -1035,6 +1080,32 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                 })
             else:
                 self.send_json({"error": "Không thể ghim tin nhắn"}, status=400)
+            return
+
+        # 7.2 API Ghim hội thoại / Tắt thông báo / Ưu tiên (Chuyển tiếp qua TCP Socket CONV_ACTION)
+        elif path.startswith("/api/conversations/") and (path.endswith("/toggle_pin/") or path.endswith("/toggle_mute/") or path.endswith("/toggle_priority/")):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            action = parts[-1]  # "toggle_pin", "toggle_mute", "toggle_priority"
+            pkt = {
+                "type": protocol.MSG_TYPE_CONV_ACTION,
+                "conversation_id": conv_id,
+                "action": action,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CONV_ACTION_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                for c in self.client_bridge.conversations:
+                    if c.get("id") == conv_id:
+                        if action == "toggle_pin":
+                            c["is_pinned"] = ack.get("is_pinned", False)
+                        elif action == "toggle_mute":
+                            c["is_muted"] = ack.get("is_muted", False)
+                        elif action == "toggle_priority":
+                            c["is_priority"] = ack.get("is_priority", True)
+                        break
+                self.send_json(ack)
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Lỗi thao tác hội thoại"}, status=400)
             return
 
         # 8. API Gửi lời mời kết bạn (Chuyển tiếp qua TCP Socket FRIEND_REQ)

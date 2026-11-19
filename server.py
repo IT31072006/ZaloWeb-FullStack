@@ -157,6 +157,32 @@ class ChatServer:
                 "is_online": (m_u.username in self.clients_by_name)
             })
 
+        shared_media = []
+        shared_files = []
+        try:
+            for m in c.messages.filter(message_type__in=['image', 'video', 'audio']).order_by('-created_at')[:20]:
+                u_url = m.attachment.url if (m.attachment and hasattr(m.attachment, 'url')) else ""
+                shared_media.append({
+                    "id": m.id,
+                    "type": m.message_type,
+                    "url": u_url,
+                    "name": m.attachment_name or m.content,
+                    "sender": m.sender.profile.get_display_name() if (m.sender and hasattr(m.sender, 'profile')) else (m.sender.username if m.sender else "Hệ thống"),
+                    "created_at": self.format_local_time(m.created_at)
+                })
+            for m in c.messages.filter(message_type='file').order_by('-created_at')[:20]:
+                u_url = m.attachment.url if (m.attachment and hasattr(m.attachment, 'url')) else ""
+                shared_files.append({
+                    "id": m.id,
+                    "name": m.attachment_name or "Tệp tin",
+                    "size": m.attachment_size or "0 B",
+                    "url": u_url,
+                    "sender": m.sender.profile.get_display_name() if (m.sender and hasattr(m.sender, 'profile')) else (m.sender.username if m.sender else "Hệ thống"),
+                    "created_at": self.format_local_time(m.created_at)
+                })
+        except Exception:
+            pass
+
         return {
             "id": c.id,
             "name": c_title,
@@ -176,11 +202,13 @@ class ChatServer:
             "updated_at": time_str,
             "unread_count": c.get_unread_count_for_user(user_obj) if user_obj else 0,
             "member_count": len(members_data),
-            "is_pinned": False,
-            "is_muted": False,
-            "is_priority": True,
+            "is_pinned": my_membership.is_pinned if my_membership else False,
+            "is_muted": my_membership.is_muted if my_membership else False,
+            "is_priority": my_membership.is_priority if my_membership else True,
             "pinned_message": pinned_info,
             "members": members_data,
+            "shared_media": shared_media,
+            "shared_files": shared_files,
         }
 
     def _log(self, tag: str, message: str):
@@ -1136,6 +1164,62 @@ class ChatServer:
                         "conversation_id": conv_id,
                         "pinned_message": pinned_info,
                     })
+
+                # D.6.2 CÀI ĐẶT HỘI THOẠI (GHIM HỘI THOẠI, TẮT THÔNG BÁO, ƯU TIÊN)
+                elif p_type == protocol.MSG_TYPE_CONV_ACTION:
+                    conv_id = packet.get("conversation_id")
+                    action = packet.get("action", "")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CONV_ACTION_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ"
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.filter(id=int(conv_id)).first()
+                        mem = c_obj.memberships.filter(user=u_curr).first() if c_obj else None
+                        if not mem:
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_CONV_ACTION_ACK,
+                                "status": "ERROR",
+                                "message": "Không tìm thấy tư cách thành viên hội thoại"
+                            })
+                            continue
+
+                        msg_resp = ""
+                        if action == "toggle_pin":
+                            mem.is_pinned = not mem.is_pinned
+                            mem.pinned_at = datetime.datetime.now() if mem.is_pinned else None
+                            mem.save(update_fields=['is_pinned', 'pinned_at'])
+                            msg_resp = "Đã ghim cuộc trò chuyện lên đầu danh sách." if mem.is_pinned else "Đã bỏ ghim cuộc trò chuyện."
+                        elif action == "toggle_mute":
+                            mem.is_muted = not mem.is_muted
+                            mem.save(update_fields=['is_muted'])
+                            msg_resp = "Đã tắt thông báo cuộc trò chuyện." if mem.is_muted else "Đã bật thông báo cuộc trò chuyện."
+                        elif action == "toggle_priority":
+                            mem.is_priority = not mem.is_priority
+                            mem.save(update_fields=['is_priority'])
+                            msg_resp = "Đã chuyển vào mục Ưu tiên." if mem.is_priority else "Đã chuyển vào mục Khác."
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CONV_ACTION_ACK,
+                            "status": "OK",
+                            "action": action,
+                            "conversation_id": c_obj.id,
+                            "is_pinned": mem.is_pinned,
+                            "is_muted": mem.is_muted,
+                            "is_priority": mem.is_priority,
+                            "message": msg_resp
+                        })
+                        self._log("CONV_ACTION", f"[{nickname}] {action} trong hội thoại #{conv_id} -> {msg_resp}")
+                    except Exception as ex:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CONV_ACTION_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi thao tác hội thoại: {ex}"
+                        })
 
                 # D.7 NHỊP TIM GIỮ KẾT NỐI & ĐO ĐỘ TRỄ (PING / PONG KEEP-ALIVE)
                 elif p_type in (protocol.MSG_TYPE_PING, "ping"):
