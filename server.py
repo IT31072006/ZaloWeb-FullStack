@@ -102,6 +102,86 @@ class ChatServer:
                 pass
         return dt.strftime("%H:%M")
 
+    def serialize_conversation(self, c, user_obj):
+        """Chuyển đổi đối tượng Conversation thành dict đầy đủ thuộc tính cho Client."""
+        if not HAS_DJANGO or not c:
+            return {}
+        last_m = c.get_last_message()
+        other = c.get_other_member(user_obj) if not c.is_group else None
+        last_txt = ""
+        if last_m:
+            if last_m.message_type == 'image':
+                last_txt = "[Hình ảnh]"
+            elif last_m.message_type == 'video':
+                last_txt = "[Video]"
+            elif last_m.message_type == 'audio':
+                last_txt = "[Tin nhắn thoại]"
+            elif last_m.message_type == 'file':
+                last_txt = f"[Tệp tin] {last_m.attachment_name}"
+            elif last_m.message_type == 'call':
+                last_txt = f"[Cuộc gọi] {last_m.content}"
+            elif last_m.message_type == 'system':
+                last_txt = last_m.content
+            else:
+                last_txt = last_m.content
+
+        c_title = c.get_title_for_user(user_obj)
+        c_avatar = c.get_avatar_for_user(user_obj)
+        time_str = self.format_local_time(c.updated_at) if c.updated_at else ""
+
+        pinned_info = None
+        if c.pinned_message:
+            pm = c.pinned_message
+            s_name = pm.sender.profile.get_display_name() if (pm.sender and hasattr(pm.sender, 'profile')) else (pm.sender.username if pm.sender else "Hệ thống")
+            pinned_info = {
+                "id": pm.id,
+                "content": pm.content,
+                "sender_name": s_name,
+                "formatted_time": self.format_local_time(pm.created_at),
+            }
+
+        my_membership = c.memberships.filter(user=user_obj).first() if user_obj else None
+        my_role = my_membership.role if my_membership else "member"
+
+        members_data = []
+        for mem in c.memberships.select_related('user__profile').all():
+            m_u = mem.user
+            mp = getattr(m_u, 'profile', None)
+            members_data.append({
+                "id": m_u.id,
+                "username": m_u.username,
+                "display_name": mp.get_display_name() if mp else m_u.username,
+                "avatar_url": mp.get_avatar_url() if mp else "",
+                "role": mem.role,
+                "is_online": (m_u.username in self.clients_by_name)
+            })
+
+        return {
+            "id": c.id,
+            "name": c_title,
+            "title": c_title,
+            "is_group": c.is_group,
+            "is_cloud": (c.name == "Cloud của tôi"),
+            "other_username": other.username if other else "",
+            "avatar_url": c_avatar,
+            "my_role": my_role,
+            "last_message": {
+                "id": last_m.id if last_m else 0,
+                "type": last_m.message_type if last_m else "text",
+                "preview": last_txt[:60] if last_txt else "Bắt đầu cuộc trò chuyện",
+                "time_ago": time_str,
+            },
+            "time_label": time_str,
+            "updated_at": time_str,
+            "unread_count": c.get_unread_count_for_user(user_obj) if user_obj else 0,
+            "member_count": len(members_data),
+            "is_pinned": False,
+            "is_muted": False,
+            "is_priority": True,
+            "pinned_message": pinned_info,
+            "members": members_data,
+        }
+
     def _log(self, tag: str, message: str):
         """Ghi log ra console và gọi callback GUI nếu có."""
         ts = self.get_timestamp()
@@ -381,68 +461,17 @@ class ChatServer:
                             profile.is_online = True
                             profile.save(update_fields=['is_online'])
 
-                        # Lấy danh sách cuộc hội thoại của user (chỉ lấy các cuộc trò chuyện đã có tin nhắn thực tế)
+                        # Lấy danh sách cuộc hội thoại của user (bao gồm cả Cloud cá nhân và nhóm)
                         memberships = user_obj.chat_memberships.select_related('conversation').order_by('-conversation__updated_at')
                         for mem in memberships:
                             c = mem.conversation
                             last_m = c.get_last_message()
-                            # Bỏ qua các hội thoại chưa có tin nhắn nào để giao diện để trống sạch đẹp
-                            if not last_m and not c.is_group:
+                            # Bỏ qua các hội thoại 1-1 chưa có tin nhắn nào
+                            if not last_m and not c.is_group and c.name != "Cloud của tôi":
                                 continue
-
-                            other = c.get_other_member(user_obj)
-                            last_txt = ""
-                            if last_m:
-                                if last_m.message_type == 'image':
-                                    last_txt = "[Hình ảnh]"
-                                elif last_m.message_type == 'video':
-                                    last_txt = "[Video]"
-                                elif last_m.message_type == 'audio':
-                                    last_txt = "[Tin nhắn thoại]"
-                                elif last_m.message_type == 'file':
-                                    last_txt = f"[Tệp tin] {last_m.attachment_name}"
-                                elif last_m.message_type == 'call':
-                                    last_txt = f"[Cuộc gọi] {last_m.content}"
-                                else:
-                                    last_txt = last_m.content
-
-                            c_title = c.get_title_for_user(user_obj)
-                            c_avatar = c.get_avatar_for_user(user_obj)
-                            time_str = self.format_local_time(c.updated_at) if c.updated_at else ""
-
-                            pinned_info = None
-                            if c.pinned_message:
-                                pm = c.pinned_message
-                                s_name = pm.sender.profile.get_display_name() if (pm.sender and hasattr(pm.sender, 'profile')) else (pm.sender.username if pm.sender else "Hệ thống")
-                                pinned_info = {
-                                    "id": pm.id,
-                                    "content": pm.content,
-                                    "sender_name": s_name,
-                                    "formatted_time": self.format_local_time(pm.created_at),
-                                }
-
-                            convs_data.append({
-                                "id": c.id,
-                                "name": c_title,
-                                "title": c_title,
-                                "is_group": c.is_group,
-                                "other_username": other.username if other else "",
-                                "avatar_url": c_avatar,
-                                "last_message": {
-                                    "id": last_m.id if last_m else 0,
-                                    "type": last_m.message_type if last_m else "text",
-                                    "preview": last_txt[:60] if last_txt else "Bắt đầu cuộc trò chuyện",
-                                    "time_ago": time_str,
-                                },
-                                "time_label": time_str,
-                                "updated_at": time_str,
-                                "unread_count": c.get_unread_count_for_user(user_obj),
-                                "member_count": c.get_member_count(),
-                                "is_pinned": False,
-                                "is_muted": False,
-                                "is_priority": True,
-                                "pinned_message": pinned_info,
-                            })
+                            conv_dict = self.serialize_conversation(c, user_obj)
+                            if conv_dict:
+                                convs_data.append(conv_dict)
 
                         # Lấy danh sách liên hệ để chat 1-1
                         for o in User.objects.exclude(id=user_obj.id).select_related('profile'):
@@ -539,7 +568,11 @@ class ChatServer:
                     history_list = []
                     if HAS_DJANGO and conv_id:
                         try:
-                            msgs = Message.objects.filter(conversation_id=conv_id).select_related('sender__profile').prefetch_related('reactions__user__profile').order_by('created_at')[:100]
+                            u_curr = User.objects.filter(username=nickname).first()
+                            qs = Message.objects.filter(conversation_id=conv_id)
+                            if u_curr:
+                                qs = qs.exclude(deleted_by=u_curr)
+                            msgs = qs.select_related('sender__profile').prefetch_related('reactions__user__profile').order_by('created_at')[:100]
                             for m in msgs:
                                 s_user = m.sender.username if m.sender else "Hệ thống"
                                 s_disp = s_user
@@ -1641,6 +1674,686 @@ class ChatServer:
                         "type": "USER_UPDATE",
                         "user": user_info,
                     }, exclude_sock=client_sock)
+
+                # ==============================================================================
+                # NHÓM 1: QUẢN LÝ NHÓM CHAT (GROUP MANAGEMENT QUA TCP SOCKET)
+                # ==============================================================================
+
+                # 1. Thêm thành viên mới vào nhóm (GROUP_ADD_MEMBER)
+                elif p_type == protocol.MSG_TYPE_GROUP_ADD_MEMBER:
+                    conv_id = packet.get("conversation_id")
+                    target_user_id = packet.get("user_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id or not target_user_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_ADD_MEMBER_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu thêm thành viên không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True, memberships__user=u_curr)
+                        target_u = User.objects.get(id=int(target_user_id))
+                        mem, created = ConversationMember.objects.get_or_create(conversation=c_obj, user=target_u, defaults={'role': 'member'})
+                        
+                        inviter_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        target_name = target_u.profile.get_display_name() if hasattr(target_u, 'profile') else target_u.username
+                        
+                        sys_m = Message.objects.create(
+                            conversation=c_obj,
+                            sender=None,
+                            message_type='system',
+                            content=f"{inviter_name} đã thêm {target_name} vào nhóm."
+                        )
+                        c_obj.save(update_fields=['updated_at'])
+
+                        # Phản hồi cho người gửi yêu cầu
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_ADD_MEMBER_ACK,
+                            "status": "OK",
+                            "message": f"Đã thêm {target_name} vào nhóm!",
+                            "user_id": target_u.id,
+                            "conversation_id": c_obj.id,
+                        })
+
+                        # Gửi thông báo tới thành viên mới mở nhóm ngay (nếu online)
+                        with self.lock:
+                            target_sock = self.clients_by_name.get(target_u.username)
+                        if target_sock:
+                            protocol.send_packet(target_sock, {
+                                "type": "conversation_created",
+                                "conversation": self.serialize_conversation(c_obj, target_u)
+                            })
+
+                        # Phát sóng tin nhắn hệ thống và cập nhật danh sách thành viên tới tất cả người trong nhóm
+                        time_str = self.format_local_time(sys_m.created_at)
+                        sys_pkt = {
+                            "type": protocol.MSG_TYPE_CHAT,
+                            "conversation_id": c_obj.id,
+                            "message_id": sys_m.id,
+                            "id": sys_m.id,
+                            "sender": "Hệ thống",
+                            "sender_name": "Hệ thống",
+                            "sender_avatar": "",
+                            "is_me": False,
+                            "message_type": "system",
+                            "content": sys_m.content,
+                            "is_encrypted": False,
+                            "timestamp": time_str,
+                            "formatted_time": time_str,
+                            "created_at": sys_m.created_at.isoformat(),
+                            "is_recalled": False,
+                            "reactions": [],
+                        }
+                        for m in c_obj.memberships.select_related('user').all():
+                            with self.lock:
+                                sock = self.clients_by_name.get(m.user.username)
+                            if sock:
+                                protocol.send_packet(sock, sys_pkt)
+                                protocol.send_packet(sock, {
+                                    "type": "group_updated",
+                                    "conversation": self.serialize_conversation(c_obj, m.user)
+                                })
+                        self._log("GROUP", f"'{nickname}' đã thêm '{target_u.username}' vào nhóm [{c_obj.name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_ADD_MEMBER_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi thêm thành viên: {e}"
+                        })
+
+                # 2. Xóa thành viên khỏi nhóm (GROUP_REMOVE_MEMBER)
+                elif p_type == protocol.MSG_TYPE_GROUP_REMOVE_MEMBER:
+                    conv_id = packet.get("conversation_id")
+                    target_user_id = packet.get("user_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id or not target_user_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True)
+                        my_mem = c_obj.memberships.filter(user=u_curr).first()
+                        if not my_mem or my_mem.role != 'admin':
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK,
+                                "status": "ERROR",
+                                "message": "Chỉ có Trưởng nhóm mới có quyền xóa thành viên!"
+                            })
+                            continue
+
+                        target_mem = c_obj.memberships.filter(user_id=int(target_user_id)).first()
+                        if not target_mem:
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK,
+                                "status": "ERROR",
+                                "message": "Thành viên không tồn tại trong nhóm."
+                            })
+                            continue
+
+                        target_u = target_mem.user
+                        target_name = target_u.profile.get_display_name() if hasattr(target_u, 'profile') else target_u.username
+                        admin_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        target_mem.delete()
+
+                        sys_m = Message.objects.create(
+                            conversation=c_obj,
+                            sender=None,
+                            message_type='system',
+                            content=f"{admin_name} đã xóa {target_name} khỏi nhóm."
+                        )
+                        c_obj.save(update_fields=['updated_at'])
+
+                        # Phản hồi ACK cho Trưởng nhóm
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK,
+                            "status": "OK",
+                            "message": f"Đã xóa {target_name} khỏi nhóm!",
+                            "conversation_id": c_obj.id,
+                        })
+
+                        # Gửi thông báo trực tiếp cho người bị xóa nếu đang online
+                        with self.lock:
+                            target_sock = self.clients_by_name.get(target_u.username)
+                        if target_sock:
+                            protocol.send_packet(target_sock, {
+                                "type": "group_removed",
+                                "conversation_id": c_obj.id,
+                                "message": f"Bạn đã bị xóa khỏi nhóm '{c_obj.name}'."
+                            })
+
+                        # Phát sóng tin nhắn hệ thống và cập nhật nhóm cho các thành viên còn lại
+                        time_str = self.format_local_time(sys_m.created_at)
+                        sys_pkt = {
+                            "type": protocol.MSG_TYPE_CHAT,
+                            "conversation_id": c_obj.id,
+                            "message_id": sys_m.id,
+                            "id": sys_m.id,
+                            "sender": "Hệ thống",
+                            "sender_name": "Hệ thống",
+                            "sender_avatar": "",
+                            "is_me": False,
+                            "message_type": "system",
+                            "content": sys_m.content,
+                            "is_encrypted": False,
+                            "timestamp": time_str,
+                            "formatted_time": time_str,
+                            "created_at": sys_m.created_at.isoformat(),
+                            "is_recalled": False,
+                            "reactions": [],
+                        }
+                        for m in c_obj.memberships.select_related('user').all():
+                            with self.lock:
+                                sock = self.clients_by_name.get(m.user.username)
+                            if sock:
+                                protocol.send_packet(sock, sys_pkt)
+                                protocol.send_packet(sock, {
+                                    "type": "group_updated",
+                                    "conversation": self.serialize_conversation(c_obj, m.user)
+                                })
+                        self._log("GROUP", f"'{nickname}' đã xóa '{target_u.username}' khỏi nhóm [{c_obj.name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi xóa thành viên: {e}"
+                        })
+
+                # 3. Rời nhóm chat (GROUP_LEAVE)
+                elif p_type == protocol.MSG_TYPE_GROUP_LEAVE:
+                    conv_id = packet.get("conversation_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_LEAVE_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True)
+                        my_mem = c_obj.memberships.filter(user=u_curr).first()
+                        if not my_mem:
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_LEAVE_ACK,
+                                "status": "ERROR",
+                                "message": "Bạn không phải thành viên của nhóm này."
+                            })
+                            continue
+
+                        is_admin = (my_mem.role == 'admin')
+                        user_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        my_mem.delete()
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_LEAVE_ACK,
+                            "status": "OK",
+                            "message": "Đã rời khỏi nhóm thành công!",
+                            "conversation_id": c_obj.id,
+                        })
+
+                        remaining_members = c_obj.memberships.select_related('user').all()
+                        if not remaining_members.exists():
+                            c_obj.delete()
+                        else:
+                            if is_admin:
+                                new_admin_m = remaining_members.first()
+                                new_admin_m.role = 'admin'
+                                new_admin_m.save(update_fields=['role'])
+                                new_admin_name = new_admin_m.user.profile.get_display_name() if hasattr(new_admin_m.user, 'profile') else new_admin_m.user.username
+                                sys_msg = Message.objects.create(
+                                    conversation=c_obj,
+                                    sender=None,
+                                    message_type='system',
+                                    content=f"{user_name} đã rời nhóm. {new_admin_name} được chỉ định làm Trưởng nhóm mới."
+                                )
+                            else:
+                                sys_msg = Message.objects.create(
+                                    conversation=c_obj,
+                                    sender=None,
+                                    message_type='system',
+                                    content=f"{user_name} đã rời khỏi nhóm."
+                                )
+                            c_obj.save(update_fields=['updated_at'])
+
+                            time_str = self.format_local_time(sys_msg.created_at)
+                            sys_pkt = {
+                                "type": protocol.MSG_TYPE_CHAT,
+                                "conversation_id": c_obj.id,
+                                "message_id": sys_msg.id,
+                                "id": sys_msg.id,
+                                "sender": "Hệ thống",
+                                "sender_name": "Hệ thống",
+                                "sender_avatar": "",
+                                "is_me": False,
+                                "message_type": "system",
+                                "content": sys_msg.content,
+                                "is_encrypted": False,
+                                "timestamp": time_str,
+                                "formatted_time": time_str,
+                                "created_at": sys_msg.created_at.isoformat(),
+                                "is_recalled": False,
+                                "reactions": [],
+                            }
+                            for m in remaining_members:
+                                with self.lock:
+                                    sock = self.clients_by_name.get(m.user.username)
+                                if sock:
+                                    protocol.send_packet(sock, sys_pkt)
+                                    protocol.send_packet(sock, {
+                                        "type": "group_updated",
+                                        "conversation": self.serialize_conversation(c_obj, m.user)
+                                    })
+                        self._log("GROUP", f"'{nickname}' đã rời nhóm [{c_obj.name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_LEAVE_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi rời nhóm: {e}"
+                        })
+
+                # 4. Cập nhật thông tin nhóm: tên nhóm & ảnh nhóm (GROUP_UPDATE)
+                elif p_type == protocol.MSG_TYPE_GROUP_UPDATE:
+                    conv_id = packet.get("conversation_id")
+                    new_name = packet.get("name")
+                    avatar_b64 = packet.get("avatar_data")
+                    avatar_fname = packet.get("avatar_name")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_UPDATE_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True, memberships__user=u_curr)
+                        if new_name and new_name.strip():
+                            c_obj.name = new_name.strip()
+
+                        if avatar_b64:
+                            try:
+                                avatar_bytes = base64.b64decode(avatar_b64)
+                                safe_name = f"group_{c_obj.id}_{int(time.time())}_{os.path.basename(avatar_fname or 'group.png')}"
+                                c_obj.avatar.save(safe_name, ContentFile(avatar_bytes), save=True)
+                            except Exception as ex:
+                                self._log("ERROR", f"Lỗi lưu avatar nhóm: {ex}")
+
+                        c_obj.save(update_fields=['name', 'updated_at'])
+                        user_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        sys_msg = Message.objects.create(
+                            conversation=c_obj,
+                            sender=None,
+                            message_type='system',
+                            content=f"{user_name} đã cập nhật thông tin nhóm."
+                        )
+
+                        c_avatar = c_obj.get_avatar_for_user(u_curr)
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_UPDATE_ACK,
+                            "status": "OK",
+                            "message": "Đã cập nhật thông tin nhóm thành công!",
+                            "title": c_obj.name,
+                            "avatar_url": c_avatar,
+                            "conversation_id": c_obj.id,
+                        })
+
+                        # Phát sóng cho tất cả thành viên trong nhóm
+                        time_str = self.format_local_time(sys_msg.created_at)
+                        sys_pkt = {
+                            "type": protocol.MSG_TYPE_CHAT,
+                            "conversation_id": c_obj.id,
+                            "message_id": sys_msg.id,
+                            "id": sys_msg.id,
+                            "sender": "Hệ thống",
+                            "sender_name": "Hệ thống",
+                            "sender_avatar": "",
+                            "is_me": False,
+                            "message_type": "system",
+                            "content": sys_msg.content,
+                            "is_encrypted": False,
+                            "timestamp": time_str,
+                            "formatted_time": time_str,
+                            "created_at": sys_msg.created_at.isoformat(),
+                            "is_recalled": False,
+                            "reactions": [],
+                        }
+                        for m in c_obj.memberships.select_related('user').all():
+                            with self.lock:
+                                sock = self.clients_by_name.get(m.user.username)
+                            if sock:
+                                protocol.send_packet(sock, sys_pkt)
+                                protocol.send_packet(sock, {
+                                    "type": "group_updated",
+                                    "conversation": self.serialize_conversation(c_obj, m.user)
+                                })
+                        self._log("GROUP", f"'{nickname}' đã cập nhật thông tin nhóm [{c_obj.name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_UPDATE_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi cập nhật nhóm: {e}"
+                        })
+
+                # 5. Giải tán nhóm (GROUP_DISBAND)
+                elif p_type == protocol.MSG_TYPE_GROUP_DISBAND:
+                    conv_id = packet.get("conversation_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_DISBAND_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True)
+                        my_mem = c_obj.memberships.filter(user=u_curr).first()
+                        if not my_mem or my_mem.role != 'admin':
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_DISBAND_ACK,
+                                "status": "ERROR",
+                                "message": "Chỉ có Trưởng nhóm mới có quyền giải tán nhóm!"
+                            })
+                            continue
+
+                        member_sockets = []
+                        for m in c_obj.memberships.select_related('user').all():
+                            with self.lock:
+                                sock = self.clients_by_name.get(m.user.username)
+                            if sock:
+                                member_sockets.append(sock)
+
+                        c_name = c_obj.name
+                        c_id = c_obj.id
+                        c_obj.delete()
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_DISBAND_ACK,
+                            "status": "OK",
+                            "message": f"Đã giải tán nhóm '{c_name}' thành công!",
+                            "conversation_id": c_id,
+                        })
+
+                        # Phát sóng tới tất cả socket thành viên
+                        for sock in member_sockets:
+                            protocol.send_packet(sock, {
+                                "type": "group_disbanded",
+                                "conversation_id": c_id,
+                                "message": f"Nhóm '{c_name}' đã được giải tán bởi Trưởng nhóm."
+                            })
+                        self._log("GROUP", f"'{nickname}' đã giải tán nhóm [{c_name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_DISBAND_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi giải tán nhóm: {e}"
+                        })
+
+                # 6. Phân quyền / Chuyển quyền Trưởng nhóm (GROUP_CHANGE_ROLE)
+                elif p_type == protocol.MSG_TYPE_GROUP_CHANGE_ROLE:
+                    conv_id = packet.get("conversation_id")
+                    target_user_id = packet.get("user_id")
+                    new_role = packet.get("role", "admin")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not conv_id or not target_user_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        c_obj = Conversation.objects.get(id=int(conv_id), is_group=True)
+                        my_mem = c_obj.memberships.filter(user=u_curr).first()
+                        if not my_mem or my_mem.role != 'admin':
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK,
+                                "status": "ERROR",
+                                "message": "Chỉ có Trưởng nhóm mới có quyền phân quyền!"
+                            })
+                            continue
+
+                        target_mem = c_obj.memberships.filter(user_id=int(target_user_id)).first()
+                        if not target_mem:
+                            protocol.send_packet(client_sock, {
+                                "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK,
+                                "status": "ERROR",
+                                "message": "Không tìm thấy thành viên trong nhóm."
+                            })
+                            continue
+
+                        target_mem.role = new_role
+                        target_mem.save(update_fields=['role'])
+
+                        target_u = target_mem.user
+                        target_name = target_u.profile.get_display_name() if hasattr(target_u, 'profile') else target_u.username
+                        admin_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                        role_label = "Trưởng nhóm" if new_role == 'admin' else "Thành viên"
+
+                        sys_msg = Message.objects.create(
+                            conversation=c_obj,
+                            sender=None,
+                            message_type='system',
+                            content=f"{admin_name} đã chỉ định {target_name} làm {role_label}."
+                        )
+                        c_obj.save(update_fields=['updated_at'])
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK,
+                            "status": "OK",
+                            "message": f"Đã chuyển quyền {role_label} cho {target_name}!",
+                            "conversation_id": c_obj.id,
+                        })
+
+                        time_str = self.format_local_time(sys_msg.created_at)
+                        sys_pkt = {
+                            "type": protocol.MSG_TYPE_CHAT,
+                            "conversation_id": c_obj.id,
+                            "message_id": sys_msg.id,
+                            "id": sys_msg.id,
+                            "sender": "Hệ thống",
+                            "sender_name": "Hệ thống",
+                            "sender_avatar": "",
+                            "is_me": False,
+                            "message_type": "system",
+                            "content": sys_msg.content,
+                            "is_encrypted": False,
+                            "timestamp": time_str,
+                            "formatted_time": time_str,
+                            "created_at": sys_msg.created_at.isoformat(),
+                            "is_recalled": False,
+                            "reactions": [],
+                        }
+                        for m in c_obj.memberships.select_related('user').all():
+                            with self.lock:
+                                sock = self.clients_by_name.get(m.user.username)
+                            if sock:
+                                protocol.send_packet(sock, sys_pkt)
+                                protocol.send_packet(sock, {
+                                    "type": "group_updated",
+                                    "conversation": self.serialize_conversation(c_obj, m.user)
+                                })
+                        self._log("GROUP", f"'{nickname}' đã đổi quyền '{target_u.username}' thành {role_label} trong [{c_obj.name}]")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi phân quyền: {e}"
+                        })
+
+                # ==============================================================================
+                # NHÓM 2: CLOUD CỦA TÔI & THAO TÁC TIN NHẮN (FORWARD & DELETE FOR ME)
+                # ==============================================================================
+
+                # 7. Mở 'Cloud của tôi' (GET_CLOUD)
+                elif p_type == protocol.MSG_TYPE_GET_CLOUD:
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CLOUD_ACK,
+                            "status": "ERROR",
+                            "message": "Chưa đăng nhập."
+                        })
+                        continue
+                    try:
+                        cloud_conv = Conversation.objects.filter(is_group=False, memberships__user=u_curr, name='Cloud của tôi').first()
+                        if not cloud_conv:
+                            cloud_conv = Conversation.objects.create(name='Cloud của tôi', is_group=False, created_by=u_curr)
+                            ConversationMember.objects.create(conversation=cloud_conv, user=u_curr, role='admin')
+                            Message.objects.create(
+                                conversation=cloud_conv,
+                                sender=u_curr,
+                                message_type='text',
+                                content='Chào mừng đến với Cloud của tôi! Nơi lưu trữ an toàn các văn bản, tệp tin và đoạn code của riêng bạn.'
+                            )
+
+                        total_bytes = 0
+                        for m in cloud_conv.messages.all():
+                            if m.attachment:
+                                try:
+                                    total_bytes += m.attachment.size
+                                except Exception:
+                                    pass
+                            if m.content:
+                                total_bytes += len(m.content.encode('utf-8'))
+
+                        storage_mb = round(total_bytes / (1024 * 1024), 2)
+                        storage_percent = round((storage_mb / 1024.0) * 100, 1)
+
+                        conv_dict = self.serialize_conversation(cloud_conv, u_curr)
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CLOUD_ACK,
+                            "status": "OK",
+                            "id": cloud_conv.id,
+                            "title": "Cloud của tôi",
+                            "is_cloud": True,
+                            "avatar_url": cloud_conv.get_avatar_for_user(u_curr),
+                            "storage_used_bytes": total_bytes,
+                            "storage_used_mb": storage_mb,
+                            "storage_limit_mb": 1024,
+                            "storage_percent": max(storage_percent, 0.1) if total_bytes > 0 else 0,
+                            "conversation": conv_dict
+                        })
+                        self._log("CLOUD", f"'{nickname}' đã mở Cloud của tôi (Đã dùng: {storage_mb} MB)")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_CLOUD_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi mở Cloud: {e}"
+                        })
+
+                # 8. Chuyển tiếp tin nhắn sang nhiều cuộc hội thoại (FORWARD_MESSAGE)
+                elif p_type == protocol.MSG_TYPE_FORWARD_MESSAGE:
+                    orig_msg_id = packet.get("message_id")
+                    conv_ids = packet.get("conversation_ids", [])
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not orig_msg_id or not conv_ids:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_FORWARD_MESSAGE_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu chuyển tiếp không hợp lệ."
+                        })
+                        continue
+                    try:
+                        orig_m = Message.objects.get(id=int(orig_msg_id))
+                        forwarded_count = 0
+                        sender_disp = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else nickname
+                        sender_avatar = u_curr.profile.get_avatar_url() if hasattr(u_curr, 'profile') else ""
+
+                        for cid in conv_ids:
+                            target_conv = Conversation.objects.filter(id=int(cid), memberships__user=u_curr).first()
+                            if not target_conv:
+                                continue
+
+                            new_m = Message.objects.create(
+                                conversation=target_conv,
+                                sender=u_curr,
+                                message_type=orig_m.message_type,
+                                content=orig_m.content,
+                                attachment=orig_m.attachment,
+                                attachment_name=orig_m.attachment_name,
+                                attachment_size=orig_m.attachment_size,
+                                code_language=orig_m.code_language
+                            )
+                            target_conv.save(update_fields=['updated_at'])
+                            forwarded_count += 1
+
+                            time_str = self.format_local_time(new_m.created_at)
+                            att_url = new_m.attachment.url if (new_m.attachment and hasattr(new_m.attachment, 'url')) else ""
+
+                            fwd_packet = {
+                                "type": protocol.MSG_TYPE_FILE if new_m.attachment else protocol.MSG_TYPE_CHAT,
+                                "conversation_id": target_conv.id,
+                                "message_id": new_m.id,
+                                "id": new_m.id,
+                                "sender": nickname,
+                                "sender_name": sender_disp,
+                                "sender_avatar": sender_avatar,
+                                "is_me": False,
+                                "message_type": new_m.message_type,
+                                "content": new_m.content,
+                                "is_encrypted": bool(new_m.content and new_m.content.startswith("[ENC:")),
+                                "attachment_url": att_url,
+                                "file_name": new_m.attachment_name,
+                                "file_size_str": new_m.attachment_size,
+                                "timestamp": time_str,
+                                "formatted_time": time_str,
+                                "created_at": new_m.created_at.isoformat(),
+                                "is_recalled": False,
+                                "reactions": [],
+                            }
+
+                            for mem in target_conv.memberships.select_related('user').all():
+                                with self.lock:
+                                    sock = self.clients_by_name.get(mem.user.username)
+                                if sock:
+                                    protocol.send_packet(sock, fwd_packet)
+
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_FORWARD_MESSAGE_ACK,
+                            "status": "OK",
+                            "message": f"Đã chuyển tiếp tin nhắn tới {forwarded_count} cuộc trò chuyện!",
+                            "forwarded_count": forwarded_count,
+                        })
+                        self._log("FORWARD", f"'{nickname}' đã chuyển tiếp tin nhắn #{orig_msg_id} tới {forwarded_count} hội thoại.")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_FORWARD_MESSAGE_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi chuyển tiếp tin nhắn: {e}"
+                        })
+
+                # 9. Xóa tin nhắn ở phía tôi (DELETE_FOR_ME)
+                elif p_type == protocol.MSG_TYPE_DELETE_FOR_ME:
+                    msg_id = packet.get("message_id")
+                    u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
+                    if not HAS_DJANGO or not u_curr or not msg_id:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_DELETE_FOR_ME_ACK,
+                            "status": "ERROR",
+                            "message": "Dữ liệu không hợp lệ."
+                        })
+                        continue
+                    try:
+                        m_obj = Message.objects.get(id=int(msg_id))
+                        m_obj.deleted_by.add(u_curr)
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_DELETE_FOR_ME_ACK,
+                            "status": "OK",
+                            "message": "Đã xóa tin nhắn ở phía bạn.",
+                            "message_id": m_obj.id,
+                        })
+                        self._log("DELETE_FOR_ME", f"'{nickname}' đã xóa tin nhắn #{msg_id} ở phía mình.")
+                    except Exception as e:
+                        protocol.send_packet(client_sock, {
+                            "type": protocol.MSG_TYPE_DELETE_FOR_ME_ACK,
+                            "status": "ERROR",
+                            "message": f"Lỗi xóa tin nhắn: {e}"
+                        })
 
                 # E. BÁO HIỆU CUỘC GỌI WEBRTC (CALL SIGNALING QUA SOCKET TCP)
                 elif p_type == protocol.MSG_TYPE_CALL_REQ:

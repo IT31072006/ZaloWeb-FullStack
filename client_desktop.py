@@ -443,6 +443,22 @@ class ZaloTCPClient:
                         self.conversations.insert(0, conv)
                     self._broadcast_to_ui(packet)
 
+                # 8.5 Gói tin Cập nhật nhóm chat (Group Updated Realtime Notification)
+                elif p_type in ("group_updated",):
+                    conv_info = packet.get("conversation", {})
+                    conv_id = conv_info.get("id") or packet.get("conversation_id")
+                    for c in self.conversations:
+                        if c.get("id") == conv_id:
+                            c.update(conv_info)
+                            break
+                    self._broadcast_to_ui(packet)
+
+                # 8.6 Gói tin Xóa khỏi nhóm hoặc Giải tán nhóm (Group Removed / Disbanded)
+                elif p_type in ("group_removed", "group_disbanded"):
+                    conv_id = packet.get("conversation_id")
+                    self.conversations = [c for c in self.conversations if c.get("id") != conv_id]
+                    self._broadcast_to_ui(packet)
+
                 # 9. Gói tin danh sách người dùng online
                 elif p_type == protocol.MSG_TYPE_USER_LIST:
                     online_users = packet.get("users", [])
@@ -663,8 +679,30 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(contacts)
             return
 
-        # 10. API To-do / Tasks & Cloud
-        elif path in ("/api/tasks/", "/api/cloud/"):
+        # 10. API Mở Cloud của tôi (My Cloud Storage qua Socket TCP)
+        elif path == "/api/cloud/":
+            pkt = {"type": protocol.MSG_TYPE_GET_CLOUD}
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_CLOUD_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                c_data = ack.get("conversation")
+                if c_data and not any(c.get("id") == c_data.get("id") for c in self.client_bridge.conversations):
+                    self.client_bridge.conversations.insert(0, c_data)
+                self.send_json({
+                    "id": ack.get("id"),
+                    "title": ack.get("title", "Cloud của tôi"),
+                    "is_cloud": True,
+                    "avatar_url": ack.get("avatar_url", ""),
+                    "storage_used_bytes": ack.get("storage_used_bytes", 0),
+                    "storage_used_mb": ack.get("storage_used_mb", 0),
+                    "storage_limit_mb": ack.get("storage_limit_mb", 1024),
+                    "storage_percent": ack.get("storage_percent", 0),
+                })
+            else:
+                self.send_json({"error": "Không thể mở Cloud của tôi"}, status=500)
+            return
+
+        # 11. API To-do / Tasks
+        elif path == "/api/tasks/":
             self.send_json([])
             return
 
@@ -1066,6 +1104,184 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 err = ack.get("message") if ack else "Máy chủ TCP không phản hồi khi cập nhật hồ sơ!"
                 self.send_json({"error": err}, status=400)
+            return
+
+        # 11. API Thêm thành viên vào nhóm (GROUP_ADD_MEMBER)
+        elif path.startswith("/api/conversations/") and path.endswith("/add_member/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            user_id = body.get("user_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_ADD_MEMBER,
+                "conversation_id": conv_id,
+                "user_id": user_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_ADD_MEMBER_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.send_json({
+                    "message": ack.get("message", "Đã thêm thành viên vào nhóm!"),
+                    "user_id": user_id
+                })
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể thêm thành viên"}, status=400)
+            return
+
+        # 12. API Xóa thành viên khỏi nhóm (GROUP_REMOVE_MEMBER)
+        elif path.startswith("/api/conversations/") and path.endswith("/remove_member/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            user_id = body.get("user_id")
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_REMOVE_MEMBER,
+                "conversation_id": conv_id,
+                "user_id": user_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_REMOVE_MEMBER_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.send_json({"message": ack.get("message", "Đã xóa thành viên khỏi nhóm!")})
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể xóa thành viên"}, status=400)
+            return
+
+        # 13. API Rời khỏi nhóm chat (GROUP_LEAVE)
+        elif path.startswith("/api/conversations/") and path.endswith("/leave/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_LEAVE,
+                "conversation_id": conv_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_LEAVE_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.client_bridge.conversations = [c for c in self.client_bridge.conversations if c.get("id") != conv_id]
+                self.send_json({"message": ack.get("message", "Đã rời khỏi nhóm!")})
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể rời nhóm"}, status=400)
+            return
+
+        # 14. API Giải tán nhóm chat (GROUP_DISBAND)
+        elif path.startswith("/api/conversations/") and path.endswith("/disband/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_DISBAND,
+                "conversation_id": conv_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_DISBAND_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.client_bridge.conversations = [c for c in self.client_bridge.conversations if c.get("id") != conv_id]
+                self.send_json({"message": ack.get("message", "Đã giải tán nhóm!")})
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể giải tán nhóm"}, status=400)
+            return
+
+        # 15. API Đổi tên & Ảnh đại diện nhóm (GROUP_UPDATE)
+        elif path.startswith("/api/conversations/") and path.endswith("/update_group/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            ctype = self.headers.get("Content-Type", "")
+            name_val = ""
+            avatar_b64 = ""
+            avatar_fname = ""
+
+            if "multipart/form-data" in ctype:
+                fields, files = self.parse_form_data()
+                name_val = fields.get("name") or fields.get("title") or ""
+                avatar_item = files.get("avatar")
+                if avatar_item and avatar_item.get("data") and avatar_item.get("filename"):
+                    avatar_fname = avatar_item["filename"]
+                    avatar_b64 = base64.b64encode(avatar_item["data"]).decode("utf-8")
+            else:
+                body = self.read_json_body()
+                name_val = body.get("name") or body.get("title") or ""
+
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_UPDATE,
+                "conversation_id": conv_id,
+                "name": name_val,
+                "avatar_data": avatar_b64,
+                "avatar_name": avatar_fname,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_UPDATE_ACK, timeout=6.0)
+            if ack and ack.get("status") == "OK":
+                for c in self.client_bridge.conversations:
+                    if c.get("id") == conv_id:
+                        if ack.get("title"):
+                            c["title"] = ack["title"]
+                            c["name"] = ack["title"]
+                        if ack.get("avatar_url"):
+                            c["avatar_url"] = ack["avatar_url"]
+                        break
+                self.send_json({
+                    "message": ack.get("message", "Đã cập nhật thông tin nhóm!"),
+                    "title": ack.get("title"),
+                    "avatar_url": ack.get("avatar_url"),
+                })
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể cập nhật nhóm"}, status=400)
+            return
+
+        # 16. API Phân quyền / Chuyển quyền Trưởng nhóm (GROUP_CHANGE_ROLE)
+        elif path.startswith("/api/conversations/") and path.endswith("/change_role/"):
+            parts = [p for p in path.split("/") if p]
+            conv_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            user_id = body.get("user_id")
+            role = body.get("role", "admin")
+            pkt = {
+                "type": protocol.MSG_TYPE_GROUP_CHANGE_ROLE,
+                "conversation_id": conv_id,
+                "user_id": user_id,
+                "role": role,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_GROUP_CHANGE_ROLE_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                self.send_json({"message": ack.get("message", "Đã phân quyền thành công!")})
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể phân quyền"}, status=400)
+            return
+
+        # 17. API Chuyển tiếp tin nhắn (FORWARD_MESSAGE)
+        elif path.startswith("/api/messages/") and path.endswith("/forward/"):
+            parts = [p for p in path.split("/") if p]
+            msg_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            body = self.read_json_body()
+            conv_ids = body.get("conversation_ids", [])
+            pkt = {
+                "type": protocol.MSG_TYPE_FORWARD_MESSAGE,
+                "message_id": msg_id,
+                "conversation_ids": conv_ids,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_FORWARD_MESSAGE_ACK, timeout=6.0)
+            if ack and ack.get("status") == "OK":
+                self.send_json({
+                    "message": ack.get("message", "Đã chuyển tiếp tin nhắn thành công!"),
+                    "forwarded_count": ack.get("forwarded_count", 0),
+                })
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể chuyển tiếp tin nhắn"}, status=400)
+            return
+
+        # 18. API Xóa tin nhắn ở phía tôi (DELETE_FOR_ME)
+        elif path.startswith("/api/messages/") and path.endswith("/delete/"):
+            parts = [p for p in path.split("/") if p]
+            msg_id = int(parts[2]) if (len(parts) >= 3 and parts[2].isdigit()) else None
+            pkt = {
+                "type": protocol.MSG_TYPE_DELETE_FOR_ME,
+                "message_id": msg_id,
+            }
+            ack = self.client_bridge.send_and_wait(pkt, protocol.MSG_TYPE_DELETE_FOR_ME_ACK, timeout=5.0)
+            if ack and ack.get("status") == "OK":
+                for conv_id, msgs in self.client_bridge.messages_cache.items():
+                    self.client_bridge.messages_cache[conv_id] = [m for m in msgs if int(m.get("id", 0)) != int(msg_id)]
+                self.send_json({
+                    "message": "Đã xóa tin nhắn ở phía bạn.",
+                    "id": msg_id
+                })
+            else:
+                self.send_json({"error": ack.get("message") if ack else "Không thể xóa tin nhắn"}, status=400)
             return
 
         self.send_json({"status": "OK"})

@@ -3725,6 +3725,49 @@ function handleWebSocketMessage(data) {
         showToast(`🎉 Bạn vừa được thêm vào nhóm: ${conv.title}`);
       }
     }
+  } else if (type === 'group_updated') {
+    const conv = data.conversation;
+    const convId = (conv && conv.id) || data.conversation_id;
+    if (convId) {
+      const existing = state.conversations.find(c => parseInt(c.id) === parseInt(convId));
+      if (existing && conv) {
+        Object.assign(existing, conv);
+        renderConversationsList();
+      }
+      if (state.currentConversationId && parseInt(state.currentConversationId) === parseInt(convId)) {
+        if (conv) {
+          state.currentConversation = Object.assign(state.currentConversation || {}, conv);
+          updateConversationInfoPanel(state.currentConversation);
+          const titleElem = document.getElementById('currentChatTitle');
+          if (titleElem) titleElem.innerText = conv.title || conv.name;
+          const currentAvatar = document.getElementById('currentChatAvatar');
+          if (currentAvatar && conv.avatar_url) currentAvatar.src = conv.avatar_url;
+        }
+      }
+    }
+  } else if (type === 'group_removed' || type === 'group_disbanded') {
+    const convId = data.conversation_id;
+    state.conversations = state.conversations.filter(c => parseInt(c.id) !== parseInt(convId));
+    renderConversationsList();
+    if (state.currentConversationId && parseInt(state.currentConversationId) === parseInt(convId)) {
+      state.currentConversationId = null;
+      state.currentConversation = null;
+      const timeline = document.getElementById('chatTimeline');
+      if (timeline) {
+        timeline.innerHTML = `
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:var(--zalo-text-muted);">
+            <div style="font-size:36px; margin-bottom:8px;">🚪</div>
+            <h4>Nhóm chat này đã bị giải tán hoặc bạn không còn là thành viên.</h4>
+          </div>
+        `;
+      }
+      const infoSidebar = document.getElementById('chatInfoSidebar');
+      if (infoSidebar) infoSidebar.style.display = 'none';
+      if (state.conversations.length > 0) {
+        selectConversation(state.conversations[0].id);
+      }
+    }
+    showToast(data.message || (type === 'group_disbanded' ? "Nhóm chat đã được giải tán!" : "Bạn đã được xóa khỏi nhóm."));
   } else if (type === 'user_status') {
     console.log(`[Presence] Người dùng ${data.display_name} hiện đang ${data.status}`);
   } else if (type === 'user_update') {

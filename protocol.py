@@ -53,6 +53,28 @@ MSG_TYPE_CONTACTS_ACK = "CONTACTS_ACK"        # Trả về danh bạ bạn bè v
 MSG_TYPE_UPDATE_PROFILE = "UPDATE_PROFILE"    # Cập nhật thông tin cá nhân và ảnh đại diện
 MSG_TYPE_UPDATE_PROFILE_ACK = "UPDATE_PROFILE_ACK"  # Phản hồi cập nhật hồ sơ
 
+# Quản lý Nhóm Chat (Group Management qua TCP Socket)
+MSG_TYPE_GROUP_ADD_MEMBER = "GROUP_ADD_MEMBER"          # Thêm thành viên mới vào nhóm (conv_id, user_id)
+MSG_TYPE_GROUP_ADD_MEMBER_ACK = "GROUP_ADD_MEMBER_ACK"  # Kết quả thêm thành viên
+MSG_TYPE_GROUP_REMOVE_MEMBER = "GROUP_REMOVE_MEMBER"    # Xóa thành viên khỏi nhóm (conv_id, user_id)
+MSG_TYPE_GROUP_REMOVE_MEMBER_ACK = "GROUP_REMOVE_MEMBER_ACK" # Kết quả xóa thành viên
+MSG_TYPE_GROUP_LEAVE = "GROUP_LEAVE"                    # Rời nhóm chat (conv_id)
+MSG_TYPE_GROUP_LEAVE_ACK = "GROUP_LEAVE_ACK"            # Kết quả rời nhóm
+MSG_TYPE_GROUP_UPDATE = "GROUP_UPDATE"                  # Cập nhật tên/ảnh nhóm (conv_id, name, avatar_data)
+MSG_TYPE_GROUP_UPDATE_ACK = "GROUP_UPDATE_ACK"          # Kết quả cập nhật nhóm
+MSG_TYPE_GROUP_DISBAND = "GROUP_DISBAND"                # Giải tán nhóm (conv_id)
+MSG_TYPE_GROUP_DISBAND_ACK = "GROUP_DISBAND_ACK"        # Kết quả giải tán nhóm
+MSG_TYPE_GROUP_CHANGE_ROLE = "GROUP_CHANGE_ROLE"        # Phân quyền/Chuyển quyền trưởng nhóm
+MSG_TYPE_GROUP_CHANGE_ROLE_ACK = "GROUP_CHANGE_ROLE_ACK"# Kết quả phân quyền nhóm
+
+# Thao tác Tin nhắn & Cloud cá nhân (Message Ops & Cloud Storage qua TCP Socket)
+MSG_TYPE_GET_CLOUD = "GET_CLOUD"                        # Yêu cầu mở hội thoại 'Cloud của tôi'
+MSG_TYPE_CLOUD_ACK = "CLOUD_ACK"                        # Trả về thông tin hội thoại Cloud & dung lượng
+MSG_TYPE_FORWARD_MESSAGE = "FORWARD_MESSAGE"            # Chuyển tiếp tin nhắn sang nhiều hội thoại
+MSG_TYPE_FORWARD_MESSAGE_ACK = "FORWARD_MESSAGE_ACK"    # Kết quả chuyển tiếp tin nhắn
+MSG_TYPE_DELETE_FOR_ME = "DELETE_FOR_ME"                # Xóa tin nhắn ở phía tôi (ẩn trong CSDL)
+MSG_TYPE_DELETE_FOR_ME_ACK = "DELETE_FOR_ME_ACK"        # Xác nhận xóa tin nhắn ở phía tôi
+
 # Nhịp tim & Đo độ trễ mạng (Heartbeat / Keep-Alive)
 MSG_TYPE_PING = "PING"                      # Client định kỳ gửi kiểm tra độ trễ và giữ kết nối
 MSG_TYPE_PONG = "PONG"                      # Server phản hồi nhịp tim kèm timestamp
