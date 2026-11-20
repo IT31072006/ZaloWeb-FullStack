@@ -382,6 +382,9 @@ def api_send_message(request, conversation_id):
     content = request.data.get('content', '').strip()
     code_language = request.data.get('code_language', 'java')
     reply_to_id = request.data.get('reply_to_id')
+    lat = request.data.get('latitude')
+    lng = request.data.get('longitude')
+    loc_address = request.data.get('location_address') or request.data.get('address') or ''
 
     reply_to = None
     if reply_to_id:
@@ -405,18 +408,24 @@ def api_send_message(request, conversation_id):
         else:
             attachment_size = f"{size_bytes / (1024 * 1024):.1f} MB"
 
-    if not content and not attachment:
+    if not content and not attachment and message_type != 'location':
         return Response({'error': 'Nội dung tin nhắn hoặc tệp đính kèm không được để trống!'}, status=status.HTTP_400_BAD_REQUEST)
+
+    parsed_lat = float(lat) if lat is not None and str(lat).strip() != '' else None
+    parsed_lng = float(lng) if lng is not None and str(lng).strip() != '' else None
 
     msg = Message.objects.create(
         conversation=conversation,
         sender=user,
         message_type=message_type,
-        content=content,
+        content=content or loc_address or (f"Vị trí: {lat}, {lng}" if lat and lng else "Vị trí địa lý"),
         attachment=attachment,
         attachment_name=attachment_name,
         attachment_size=attachment_size,
-        code_language=code_language,
+        code_language=code_language if message_type != 'location' else (f"{parsed_lat},{parsed_lng}" if parsed_lat and parsed_lng else 'location'),
+        latitude=parsed_lat,
+        longitude=parsed_lng,
+        location_address=loc_address or content,
         reply_to=reply_to
     )
 

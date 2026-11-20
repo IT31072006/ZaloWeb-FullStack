@@ -332,6 +332,11 @@
           <button class="tool-icon-btn" id="btnReminder" title="Nhắc hẹn / Giao việc">
             <svg viewBox="0 0 24 24"><path d="M22 5.72l-4.6-3.86-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39L6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9c4.97 0 9-4.03 9-9s-4.03-9-9-9zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
           </button>
+
+          <!-- Location Sharing 📍 -->
+          <button class="tool-icon-btn" id="btnLocation" title="Chia sẻ vị trí địa lý (GPS / Bản đồ)">
+            <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+          </button>
         </div>
 
         <!-- Image / Video / File Attachment Preview Bar (Trước khi gửi kèm chú thích) -->
@@ -774,6 +779,69 @@
     </div>
   </div>
 
+
+  <!-- ====================================================================
+       MODAL: CHIA SẺ VỊ TRÍ ĐỊA LÝ (GPS / MINI MAP)
+  ==================================================================== -->
+  <div class="modal-overlay" id="locationModal">
+    <div class="zalo-modal-card" style="max-width: 560px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:20px;">📍</span>
+          <h3 style="margin:0; font-size:16px;">Chia sẻ vị trí địa lý</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeModal('locationModal')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 16px 20px;">
+        <!-- Tùy chọn lấy GPS tự động -->
+        <div style="display:flex; gap:10px; margin-bottom:14px; align-items:center;">
+          <button type="button" class="btn-primary" id="btnGetGPSLocation" style="display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:7px 14px;">
+            <svg style="width:16px; height:16px; fill:currentColor;" viewBox="0 0 24 24"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3c-.46-4.17-3.77-7.48-7.94-7.94V1h-2v2.06C6.83 3.52 3.52 6.83 3.06 11H1v2h2.06c.46 4.17 3.77 7.48 7.94 7.94V23h2v-2.06c4.17-.46 7.48-3.77 7.94-7.94H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
+            Lấy vị trí hiện tại (GPS)
+          </button>
+          <span id="gpsStatusText" style="font-size:12px; color:#666;">Đang sẵn sàng...</span>
+        </div>
+
+        <!-- Các địa điểm gợi ý nhanh (Preset Chips) -->
+        <div style="margin-bottom:14px;">
+          <label style="font-size:12px; font-weight:600; color:#555; display:block; margin-bottom:6px;">Địa điểm chọn nhanh:</label>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;" id="locationPresetsContainer">
+            <button type="button" class="loc-chip active" onclick="selectPresetLocation('Đại học CNTT & TT Việt - Hàn (VKU)', 15.9753, 108.2524)">🎓 ĐH VKU Đà Nẵng</button>
+            <button type="button" class="loc-chip" onclick="selectPresetLocation('Cầu Rồng, Đà Nẵng', 16.0611, 108.2272)">🐉 Cầu Rồng</button>
+            <button type="button" class="loc-chip" onclick="selectPresetLocation('Phố cổ Hội An, Quảng Nam', 15.8801, 108.3380)">🏮 Phố cổ Hội An</button>
+            <button type="button" class="loc-chip" onclick="selectPresetLocation('Hồ Hoàn Kiếm, Hà Nội', 21.0285, 105.8542)">🏛️ Hồ Gươm (Hà Nội)</button>
+            <button type="button" class="loc-chip" onclick="selectPresetLocation('Chợ Bến Thành, TP. Hồ Chí Minh', 10.7725, 106.6980)">🏙️ Chợ Bến Thành (TP.HCM)</button>
+          </div>
+        </div>
+
+        <!-- Tên địa chỉ & Tọa độ -->
+        <div class="form-group-item" style="margin-bottom: 12px;">
+          <label style="font-size:12px; font-weight:600; color:#333;">Tên địa điểm / Địa chỉ hiển thị:</label>
+          <input type="text" id="locationAddressInput" placeholder="Ví dụ: Trường Đại học CNTT & Truyền thông Việt - Hàn (VKU)" value="Trường ĐH Công nghệ Thông tin & Truyền thông Việt - Hàn (VKU)">
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:14px;">
+          <div>
+            <label style="font-size:12px; font-weight:600; color:#555;">Vĩ độ (Latitude):</label>
+            <input type="number" step="0.000001" id="locationLatInput" value="15.975300" style="width:100%; padding:6px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px;">
+          </div>
+          <div>
+            <label style="font-size:12px; font-weight:600; color:#555;">Kinh độ (Longitude):</label>
+            <input type="number" step="0.000001" id="locationLngInput" value="108.252400" style="width:100%; padding:6px 10px; border:1px solid #ccc; border-radius:6px; font-size:13px;">
+          </div>
+        </div>
+
+        <!-- Bản đồ thu nhỏ xem trước (OpenStreetMap iframe preview) -->
+        <div style="border:1px solid #d0d7de; border-radius:8px; overflow:hidden; position:relative; height:180px; background:#e5e3df;">
+          <iframe id="locationPreviewMap" style="width:100%; height:100%; border:none;" src="https://www.openstreetmap.org/export/embed.html?bbox=108.2424%2C15.9653%2C108.2624%2C15.9853&layer=mapnik&marker=15.9753%2C108.2524"></iframe>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding:12px 20px; display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn-secondary" onclick="closeModal('locationModal')">Hủy</button>
+        <button class="btn-primary" id="btnConfirmSendLocation" style="background:#0068ff;">📍 Gửi vị trí này</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 6. CREATE TASK MODAL -->
   <div class="modal-overlay" id="createTaskModal">

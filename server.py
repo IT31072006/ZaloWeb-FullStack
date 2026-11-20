@@ -120,6 +120,8 @@ class ChatServer:
                 last_txt = f"[Tệp tin] {last_m.attachment_name}"
             elif last_m.message_type == 'call':
                 last_txt = f"[Cuộc gọi] {last_m.content}"
+            elif last_m.message_type == 'location':
+                last_txt = f"[Vị trí] {last_m.location_address or last_m.content}"
             elif last_m.message_type == 'system':
                 last_txt = last_m.content
             else:
@@ -637,6 +639,9 @@ class ChatServer:
                                     "is_me": is_me,
                                     "message_type": m.message_type,
                                     "content": m.content,
+                                    "latitude": m.latitude,
+                                    "longitude": m.longitude,
+                                    "location_address": m.location_address or "",
                                     "is_encrypted": is_enc,
                                     "attachment_url": m.attachment.url if m.attachment else "",
                                     "attachment_name": m.attachment_name or "",
@@ -667,7 +672,20 @@ class ChatServer:
                     conv_id = packet.get("conversation_id")
                     content = packet.get("content", "").strip()
                     is_enc = packet.get("is_encrypted", False) or content.startswith("[ENC:")
-                    if content:
+                    req_msg_type = packet.get("message_type") or "text"
+                    latitude = packet.get("latitude")
+                    longitude = packet.get("longitude")
+                    loc_addr = packet.get("location_address") or packet.get("address") or ""
+                    code_lang = packet.get("code_language", "")
+
+                    if req_msg_type == "location" or (latitude is not None and longitude is not None):
+                        req_msg_type = "location"
+                        if not content:
+                            content = loc_addr or f"{latitude}, {longitude}"
+                        if not code_lang:
+                            code_lang = f"{latitude},{longitude}"
+
+                    if content or req_msg_type == "location":
                         msg_time = self.get_timestamp()
                         msg_id = None
 
@@ -675,11 +693,19 @@ class ChatServer:
                             try:
                                 c_obj = Conversation.objects.get(id=conv_id)
                                 u_sender = User.objects.get(username=nickname)
+
+                                parsed_lat = float(latitude) if latitude is not None and str(latitude).strip() != '' else None
+                                parsed_lng = float(longitude) if longitude is not None and str(longitude).strip() != '' else None
+
                                 m_obj = Message.objects.create(
                                     conversation=c_obj,
                                     sender=u_sender,
-                                    message_type='text',
-                                    content=content
+                                    message_type=req_msg_type,
+                                    content=content,
+                                    code_language=code_lang,
+                                    latitude=parsed_lat,
+                                    longitude=parsed_lng,
+                                    location_address=loc_addr or (content if req_msg_type == 'location' else "")
                                 )
                                 c_obj.save(update_fields=['updated_at'])
                                 msg_time = self.format_local_time(m_obj.created_at)
@@ -697,8 +723,12 @@ class ChatServer:
                                     "sender_name": sender_disp,
                                     "sender_avatar": sender_avatar,
                                     "is_me": False,
-                                    "message_type": "text",
+                                    "message_type": req_msg_type,
                                     "content": content,
+                                    "latitude": parsed_lat,
+                                    "longitude": parsed_lng,
+                                    "location_address": loc_addr or (content if req_msg_type == 'location' else ""),
+                                    "code_language": code_lang,
                                     "is_encrypted": is_enc,
                                     "cipher_algo": packet.get("cipher_algo", "AES-256-GCM") if is_enc else "",
                                     "timestamp": msg_time,
@@ -717,6 +747,8 @@ class ChatServer:
 
                                 if is_enc:
                                     self._log("CHAT_E2EE", f"[{c_obj.name or conv_id}] 🔒 {nickname} (E2EE AES-256-GCM): {content[:36]}...")
+                                elif req_msg_type == "location":
+                                    self._log("CHAT_LOC", f"[{c_obj.name or conv_id}] 📍 {nickname}: {loc_addr or content} ({parsed_lat}, {parsed_lng})")
                                 else:
                                     self._log("CHAT_CONV", f"[{c_obj.name or conv_id}] {nickname}: {content}")
                                 continue
@@ -2334,7 +2366,7 @@ class ChatServer:
                 # 8. Chuyển tiếp tin nhắn sang nhiều cuộc hội thoại (FORWARD_MESSAGE)
                 elif p_type == protocol.MSG_TYPE_FORWARD_MESSAGE:
                     orig_msg_id = packet.get("message_id")
-                    conv_ids = packet.get("conversation_ids", [])
+                    conv_ids = packet.get("conversation_ids") or packet.get("target_conversation_ids", [])
                     u_curr = User.objects.filter(username=nickname).first() if HAS_DJANGO else None
                     if not HAS_DJANGO or not u_curr or not orig_msg_id or not conv_ids:
                         protocol.send_packet(client_sock, {
@@ -2362,7 +2394,10 @@ class ChatServer:
                                 attachment=orig_m.attachment,
                                 attachment_name=orig_m.attachment_name,
                                 attachment_size=orig_m.attachment_size,
-                                code_language=orig_m.code_language
+                                code_language=orig_m.code_language,
+                                latitude=orig_m.latitude,
+                                longitude=orig_m.longitude,
+                                location_address=orig_m.location_address
                             )
                             target_conv.save(update_fields=['updated_at'])
                             forwarded_count += 1
@@ -2381,6 +2416,10 @@ class ChatServer:
                                 "is_me": False,
                                 "message_type": new_m.message_type,
                                 "content": new_m.content,
+                                "latitude": new_m.latitude,
+                                "longitude": new_m.longitude,
+                                "location_address": new_m.location_address,
+                                "code_language": new_m.code_language,
                                 "is_encrypted": bool(new_m.content and new_m.content.startswith("[ENC:")),
                                 "attachment_url": att_url,
                                 "file_name": new_m.attachment_name,

@@ -145,6 +145,7 @@ class Message(models.Model):
         ('code', 'Đoạn mã lập trình'),
         ('call', 'Lịch sử cuộc gọi'),
         ('system', 'Hệ thống'),
+        ('location', 'Vị trí địa lý'),
     ]
 
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
@@ -157,6 +158,9 @@ class Message(models.Model):
     code_language = models.CharField(max_length=50, blank=True, default='java', verbose_name="Ngôn ngữ code")
     call_duration = models.IntegerField(default=0, verbose_name="Thời lượng cuộc gọi (giây)")
     call_status = models.CharField(max_length=30, blank=True, default='completed', verbose_name="Trạng thái cuộc gọi (completed/missed/rejected)")
+    latitude = models.FloatField(null=True, blank=True, verbose_name="Vĩ độ")
+    longitude = models.FloatField(null=True, blank=True, verbose_name="Kinh độ")
+    location_address = models.CharField(max_length=255, blank=True, verbose_name="Địa chỉ vị trí")
     is_recalled = models.BooleanField(default=False, verbose_name="Đã thu hồi")
     deleted_by = models.ManyToManyField(User, blank=True, related_name='deleted_messages', verbose_name="Người đã xóa tin nhắn")
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies', verbose_name="Trả lời tin nhắn")

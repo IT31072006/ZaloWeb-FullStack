@@ -289,7 +289,10 @@ class ZaloTCPClient:
                             print(f"[!] Lỗi lưu file đính kèm cục bộ: {e}")
 
                     # Cập nhật xem trước trong danh sách hội thoại
-                    txt = display_content or f"[{packet.get('file_name', 'Tệp tin')}]"
+                    if packet.get("message_type") == "location":
+                        txt = f"[Vị trí] {packet.get('location_address') or display_content}"
+                    else:
+                        txt = display_content or f"[{packet.get('file_name', 'Tệp tin')}]"
                     found = False
                     for c in self.conversations:
                         if c.get("id") == conv_id:
@@ -323,18 +326,21 @@ class ZaloTCPClient:
                         })
 
                     msg_mtype = packet.get("message_type")
-                    fname_l = (packet.get("file_name") or packet.get("attachment_name") or "").lower()
-                    if not msg_mtype or msg_mtype == "file" or (msg_mtype == "audio" and fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
-                        if packet.get("is_image") or fname_l.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
-                            msg_mtype = "image"
-                        elif fname_l.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
-                            msg_mtype = "video"
-                        elif fname_l.endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname_l.endswith(".webm") and (fname_l.startswith("voice_") or "voice" in fname_l)):
-                            msg_mtype = "audio"
-                        elif p_type == protocol.MSG_TYPE_FILE:
-                            msg_mtype = "file"
-                        else:
-                            msg_mtype = "text"
+                    if msg_mtype == "location" or (packet.get("latitude") is not None and packet.get("longitude") is not None):
+                        msg_mtype = "location"
+                    else:
+                        fname_l = (packet.get("file_name") or packet.get("attachment_name") or "").lower()
+                        if not msg_mtype or msg_mtype == "file" or (msg_mtype == "audio" and fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
+                            if packet.get("is_image") or fname_l.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                                msg_mtype = "image"
+                            elif fname_l.endswith((".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v")) or (fname_l.endswith(".webm") and not fname_l.startswith("voice_") and "voice" not in fname_l):
+                                msg_mtype = "video"
+                            elif fname_l.endswith((".mp3", ".wav", ".ogg", ".m4a")) or (fname_l.endswith(".webm") and (fname_l.startswith("voice_") or "voice" in fname_l)):
+                                msg_mtype = "audio"
+                            elif p_type == protocol.MSG_TYPE_FILE:
+                                msg_mtype = "file"
+                            else:
+                                msg_mtype = "text"
 
                     ui_msg = {
                         "id": packet.get("message_id") or packet.get("id") or int(time.time()),
@@ -353,6 +359,9 @@ class ZaloTCPClient:
                         "created_at": datetime.datetime.now().isoformat(),
                         "is_recalled": False,
                         "reactions": [],
+                        "latitude": packet.get("latitude"),
+                        "longitude": packet.get("longitude"),
+                        "location_address": packet.get("location_address", ""),
                         "call_duration": packet.get("call_duration", 0),
                         "call_status": packet.get("call_status", ""),
                         "formatted_duration": packet.get("formatted_duration", ""),
@@ -983,8 +992,39 @@ class LocalUIRequestHandler(http.server.SimpleHTTPRequestHandler):
                     self.client_bridge.send_tcp_packet(pkt)
             else:
                 body = self.read_json_body()
+                mtype = body.get("message_type") or "text"
                 content = body.get("content", "").strip()
-                if content:
+                code_lang = body.get("code_language", "")
+                latitude = body.get("latitude")
+                longitude = body.get("longitude")
+                loc_addr = body.get("location_address") or body.get("address") or ""
+
+                if mtype == "location" or (latitude is not None and longitude is not None):
+                    lat_f = float(latitude) if latitude is not None and str(latitude).strip() != '' else None
+                    lng_f = float(longitude) if longitude is not None and str(longitude).strip() != '' else None
+                    pkt = {
+                        "type": protocol.MSG_TYPE_CHAT,
+                        "conversation_id": conv_id,
+                        "message_type": "location",
+                        "content": content or loc_addr or f"{lat_f}, {lng_f}",
+                        "latitude": lat_f,
+                        "longitude": lng_f,
+                        "location_address": loc_addr or content or "",
+                        "code_language": f"{lat_f},{lng_f}",
+                        "is_encrypted": False
+                    }
+                    self.client_bridge.send_tcp_packet(pkt)
+                elif mtype == "code":
+                    pkt = {
+                        "type": protocol.MSG_TYPE_CHAT,
+                        "conversation_id": conv_id,
+                        "message_type": "code",
+                        "content": content,
+                        "code_language": code_lang,
+                        "is_encrypted": False
+                    }
+                    self.client_bridge.send_tcp_packet(pkt)
+                elif content:
                     enc_text = protocol.encrypt_payload(content)
                     pkt = {
                         "type": protocol.MSG_TYPE_CHAT,

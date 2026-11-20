@@ -69,6 +69,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'is_me', 'message_type', 'content', 'attachment_url', 'attachment_name',
             'attachment_size', 'code_language', 'call_duration', 'call_status',
             'formatted_duration', 'created_at', 'formatted_time',
+            'latitude', 'longitude', 'location_address',
             'is_recalled', 'reply_to_details', 'reactions'
         ]
 

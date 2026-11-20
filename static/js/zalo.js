@@ -1335,6 +1335,52 @@ function renderTimeline() {
           </button>
         </div>
       `;
+    } else if (msg.message_type === 'location') {
+      let lat = msg.latitude;
+      let lng = msg.longitude;
+      let locAddress = msg.location_address || msg.content || 'Vị trí đã chia sẻ';
+      if ((!lat || !lng) && msg.code_language && msg.code_language.includes(',')) {
+        const parts = msg.code_language.split(',');
+        lat = parseFloat(parts[0]);
+        lng = parseFloat(parts[1]);
+      }
+      if (!lat) lat = 15.9753;
+      if (!lng) lng = 108.2524;
+      const osmBbox = `${(parseFloat(lng) - 0.008).toFixed(4)}%2C${(parseFloat(lat) - 0.006).toFixed(4)}%2C${(parseFloat(lng) + 0.008).toFixed(4)}%2C${(parseFloat(lat) + 0.006).toFixed(4)}`;
+      const osmIframeUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${osmBbox}&layer=mapnik&marker=${lat}%2C${lng}`;
+      const gmapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+      const gmapsDirUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+      const coordsStr = `${parseFloat(lat).toFixed(6)}, ${parseFloat(lng).toFixed(6)}`;
+
+      bodyHtml = `
+        <div class="msg-location-card">
+          <div style="padding:10px 12px; background:#f4f7fb; border-bottom:1px solid #e1e7ee; display:flex; align-items:flex-start; gap:8px;">
+            <div style="font-size:20px; line-height:1; flex-shrink:0;">📍</div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:700; font-size:13.5px; color:#0b3c6d; line-height:1.3; word-break:break-word;">
+                ${escapeHtml(locAddress)}
+              </div>
+              <div style="font-size:11px; color:#6b7280; margin-top:2px; font-family:monospace;">
+                Tọa độ: ${coordsStr}
+              </div>
+            </div>
+          </div>
+          <div style="height:150px; position:relative; background:#e5e3df;">
+            <iframe style="width:100%; height:100%; border:none; pointer-events:auto;" src="${osmIframeUrl}"></iframe>
+          </div>
+          <div style="padding:8px 10px; background:#ffffff; display:flex; gap:6px; justify-content:space-between; border-top:1px solid #edf2f7;">
+            <a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer" style="flex:1; text-align:center; padding:5px 6px; background:#0068ff; color:#fff; text-decoration:none; border-radius:6px; font-size:11.5px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px;">
+              <span>🗺️ Google Maps</span>
+            </a>
+            <a href="${gmapsDirUrl}" target="_blank" rel="noopener noreferrer" style="flex:1; text-align:center; padding:5px 6px; background:#0ea5e9; color:#fff; text-decoration:none; border-radius:6px; font-size:11.5px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px;">
+              <span>🚗 Chỉ đường</span>
+            </a>
+            <button type="button" onclick="navigator.clipboard.writeText('${coordsStr}'); showToast('Đã sao chép tọa độ: ${coordsStr}');" style="padding:5px 8px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:6px; cursor:pointer; font-size:11.5px; font-weight:600; color:#334155;" title="Sao chép tọa độ">
+              📋
+            </button>
+          </div>
+        </div>
+      `;
     } else {
       let textContent = msg.content || '';
       if (textContent.startsWith('[ENC:AES-256-GCM]')) {
@@ -1352,6 +1398,7 @@ function renderTimeline() {
       else if (msg.reply_to_details.message_type === 'file') qSnippet = '[Tệp tin]';
       else if (msg.reply_to_details.message_type === 'audio') qSnippet = '[Tin nhắn thoại]';
       else if (msg.reply_to_details.message_type === 'code') qSnippet = '[Đoạn mã code]';
+      else if (msg.reply_to_details.message_type === 'location') qSnippet = `[Vị trí] ${msg.reply_to_details.location_address || msg.reply_to_details.content || ''}`;
 
       quoteHtml = `
         <div class="msg-quote-card" onclick="scrollToMessage(${msg.reply_to_details.id})" title="Nhấp để cuộn tới tin nhắn được trích dẫn">
@@ -1504,6 +1551,7 @@ function startReplyMessage(msgId) {
     else if (msg.message_type === 'file') snippet = `[Tệp tin] ${msg.attachment_name || ''}`;
     else if (msg.message_type === 'audio') snippet = '[Tin nhắn thoại]';
     else if (msg.message_type === 'code') snippet = `[Đoạn mã ${msg.code_language || 'Code'}]`;
+    else if (msg.message_type === 'location') snippet = `[Vị trí] ${msg.location_address || msg.content || ''}`;
     snippetSpan.innerText = snippet;
     bar.style.display = 'flex';
   }
@@ -2278,6 +2326,153 @@ async function sendCodeSnippet() {
     }
   } catch (err) {
     showToast("Lỗi gửi đoạn mã!");
+  }
+}
+
+// ==============================================================================
+// 4B. LOCATION SHARING (GPS / OpenStreetMap Mini Map)
+// ==============================================================================
+
+function openLocationModal() {
+  if (!state.currentConversationId) {
+    showToast("Vui lòng chọn một cuộc trò chuyện để chia sẻ vị trí!");
+    return;
+  }
+  openModal('locationModal');
+  const lat = parseFloat(document.getElementById('locationLatInput')?.value || 15.9753);
+  const lng = parseFloat(document.getElementById('locationLngInput')?.value || 108.2524);
+  updateLocationPreviewMap(lat, lng);
+}
+
+function updateLocationPreviewMap(lat, lng) {
+  const mapIframe = document.getElementById('locationPreviewMap');
+  if (mapIframe) {
+    const latF = parseFloat(lat);
+    const lngF = parseFloat(lng);
+    const osmBbox = `${(lngF - 0.008).toFixed(4)}%2C${(latF - 0.006).toFixed(4)}%2C${(lngF + 0.008).toFixed(4)}%2C${(latF + 0.006).toFixed(4)}`;
+    mapIframe.src = `https://www.openstreetmap.org/export/embed.html?bbox=${osmBbox}&layer=mapnik&marker=${latF}%2C${lngF}`;
+  }
+}
+
+function selectPresetLocation(name, lat, lng) {
+  const addrInput = document.getElementById('locationAddressInput');
+  const latInput = document.getElementById('locationLatInput');
+  const lngInput = document.getElementById('locationLngInput');
+  const statusEl = document.getElementById('gpsStatusText');
+
+  if (addrInput) addrInput.value = name;
+  if (latInput) latInput.value = parseFloat(lat).toFixed(6);
+  if (lngInput) lngInput.value = parseFloat(lng).toFixed(6);
+  if (statusEl) statusEl.innerText = `Đã chọn: ${name}`;
+
+  // Update chip active classes
+  const chips = document.querySelectorAll('.loc-chip');
+  chips.forEach(c => {
+    if (c.innerText.includes(name.split(',')[0].slice(0, 8))) {
+      c.classList.add('active');
+    } else {
+      c.classList.remove('active');
+    }
+  });
+
+  updateLocationPreviewMap(lat, lng);
+}
+
+function getCurrentGPSLocation() {
+  const statusEl = document.getElementById('gpsStatusText');
+  if (!navigator.geolocation) {
+    if (statusEl) statusEl.innerText = 'Trình duyệt không hỗ trợ Geolocation.';
+    showToast('Trình duyệt của bạn không hỗ trợ định vị GPS!');
+    return;
+  }
+
+  if (statusEl) statusEl.innerText = 'Đang dò tìm tọa độ GPS...';
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const latInput = document.getElementById('locationLatInput');
+      const lngInput = document.getElementById('locationLngInput');
+      const addrInput = document.getElementById('locationAddressInput');
+
+      if (latInput) latInput.value = lat.toFixed(6);
+      if (lngInput) lngInput.value = lng.toFixed(6);
+      if (addrInput) addrInput.value = `Vị trí GPS của tôi (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      if (statusEl) statusEl.innerText = `Đã lấy tọa độ GPS thành công (±${Math.round(position.coords.accuracy || 10)}m)`;
+
+      // Deselect preset chips
+      document.querySelectorAll('.loc-chip').forEach(c => c.classList.remove('active'));
+
+      updateLocationPreviewMap(lat, lng);
+      showToast('Đã xác định tọa độ GPS thành công!');
+    },
+    (err) => {
+      console.warn("GPS error:", err);
+      let errMsg = "Không thể lấy vị trí GPS (vui lòng cấp quyền hoặc chọn địa điểm mẫu).";
+      if (err.code === 1) errMsg = "Bạn đã từ chối quyền truy cập vị trí!";
+      else if (err.code === 2) errMsg = "Không thể xác định vị trí vệ tinh GPS!";
+      else if (err.code === 3) errMsg = "Quá thời gian lấy tọa độ GPS!";
+      if (statusEl) statusEl.innerText = errMsg;
+      showToast(errMsg);
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+}
+
+async function sendLocationMessage() {
+  if (!state.currentConversationId) {
+    showToast("Vui lòng chọn cuộc trò chuyện trước khi gửi vị trí!");
+    return;
+  }
+
+  const addr = document.getElementById('locationAddressInput')?.value.trim() || 'Vị trí đã chia sẻ';
+  const latVal = document.getElementById('locationLatInput')?.value;
+  const lngVal = document.getElementById('locationLngInput')?.value;
+  const lat = parseFloat(latVal);
+  const lng = parseFloat(lngVal);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    showToast("Tọa độ vĩ độ hoặc kinh độ không hợp lệ!");
+    return;
+  }
+
+  const replyToId = state.replyingTo ? state.replyingTo.id : null;
+  cancelReply();
+
+  try {
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken'),
+      },
+      body: JSON.stringify({
+        message_type: 'location',
+        content: addr,
+        location_address: addr,
+        latitude: lat,
+        longitude: lng,
+        reply_to_id: replyToId
+      })
+    });
+    const newMsg = await res.json();
+    if (res.ok) {
+      if (newMsg.id) {
+        state.messages.push(newMsg);
+        state.lastMessageId = newMsg.id;
+        renderTimeline();
+        scrollChatToBottom();
+      }
+      closeModal('locationModal');
+      playNotificationSound();
+      loadConversations();
+      showToast("Đã chia sẻ vị trí thành công! 📍");
+    } else {
+      showToast(newMsg.error || "Gửi vị trí thất bại!");
+    }
+  } catch (err) {
+    console.error("Lỗi gửi vị trí:", err);
+    showToast("Lỗi kết nối khi gửi vị trí!");
   }
 }
 
@@ -3339,6 +3534,7 @@ function openForwardModal(msgId) {
     else if (msg.message_type === 'audio') snippet = '🎙️ [Tin nhắn thoại]';
     else if (msg.message_type === 'file') snippet = `📄 [Tệp tin] ${msg.attachment_name || ''}`;
     else if (msg.message_type === 'code') snippet = `💻 [Đoạn mã ${msg.code_language || 'Code'}]`;
+    else if (msg.message_type === 'location') snippet = `📍 [Vị trí] ${msg.location_address || msg.content || ''}`;
     snippetBox.innerHTML = `<strong>${escapeHtml(msg.sender_name)}:</strong> ${escapeHtml(snippet)}`;
   }
 
@@ -5583,6 +5779,21 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnReminder')?.addEventListener('click', () => openModal('createTaskModal'));
   document.getElementById('btnOpenCreateTask')?.addEventListener('click', () => openModal('createTaskModal'));
   document.getElementById('btnSubmitCreateTask')?.addEventListener('click', submitCreateTask);
+
+  // Location Sharing (GPS / Mini Map)
+  document.getElementById('btnLocation')?.addEventListener('click', openLocationModal);
+  document.getElementById('btnGetGPSLocation')?.addEventListener('click', getCurrentGPSLocation);
+  document.getElementById('btnConfirmSendLocation')?.addEventListener('click', sendLocationMessage);
+  document.getElementById('locationLatInput')?.addEventListener('input', () => {
+    const lat = document.getElementById('locationLatInput')?.value;
+    const lng = document.getElementById('locationLngInput')?.value;
+    if (lat && lng) updateLocationPreviewMap(lat, lng);
+  });
+  document.getElementById('locationLngInput')?.addEventListener('input', () => {
+    const lat = document.getElementById('locationLatInput')?.value;
+    const lng = document.getElementById('locationLngInput')?.value;
+    if (lat && lng) updateLocationPreviewMap(lat, lng);
+  });
 
   // Phase 3: Typing Indicator Listener
   document.getElementById('chatInputText')?.addEventListener('input', handleTypingInput);
