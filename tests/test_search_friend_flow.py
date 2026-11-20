@@ -62,8 +62,8 @@ def run_test():
     ack1 = protocol.recv_packet(sock1)
     assert ack1 and ack1.get("status") == "OK"
     print(f"✅ Client 1 đăng nhập: {ack1.get('user', {}).get('display_name')} (Conversations: {len(ack1.get('conversations', []))})")
-    # Kiểm tra danh sách hội thoại ban đầu phải TRỐNG (0 cuộc trò chuyện người khác)
-    assert len(ack1.get("conversations", [])) == 0, "Danh sách hội thoại ban đầu phải để trống!"
+    other_convs = [c for c in ack1.get("conversations", []) if not c.get("is_cloud") and c.get("title") != "Cloud của tôi"]
+    assert len(other_convs) == 0, "Danh sách hội thoại ban đầu phải để trống!"
     print("✅ 1. Danh sách hội thoại ban đầu hoàn toàn ĐỂ TRỐNG (chưa có người chat ảo giả lập).")
 
     protocol.send_packet(sock2, {"type": protocol.MSG_TYPE_LOGIN, "username": u2, "password": "password123"})

@@ -2351,6 +2351,7 @@ class ChatServer:
                             "avatar_url": cloud_conv.get_avatar_for_user(u_curr),
                             "storage_used_bytes": total_bytes,
                             "storage_used_mb": storage_mb,
+                            "storage_mb": storage_mb,
                             "storage_limit_mb": 1024,
                             "storage_percent": max(storage_percent, 0.1) if total_bytes > 0 else 0,
                             "conversation": conv_dict

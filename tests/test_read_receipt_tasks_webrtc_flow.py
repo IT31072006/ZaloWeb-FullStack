@@ -319,6 +319,8 @@ def run_test():
     print("\n" + "=" * 75)
     print("🎉 TẤT CẢ 17/17 BƯỚC KIỂM THỬ NHÓM 3 & NHÓM 4 ĐÃ ĐẠT 100% THÀNH CÔNG!")
     print("=" * 75)
+    sys.stdout.flush()
+    os._exit(0)
 
 if __name__ == "__main__":
     run_test()
