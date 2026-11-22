@@ -414,11 +414,18 @@ def api_send_message(request, conversation_id):
     parsed_lat = float(lat) if lat is not None and str(lat).strip() != '' else None
     parsed_lng = float(lng) if lng is not None and str(lng).strip() != '' else None
 
+    if message_type in ('image', 'video'):
+        final_content = content
+    elif message_type == 'location':
+        final_content = content or loc_address or (f"Vị trí: {lat}, {lng}" if lat and lng else "Vị trí địa lý")
+    else:
+        final_content = content or loc_address or ''
+
     msg = Message.objects.create(
         conversation=conversation,
         sender=user,
         message_type=message_type,
-        content=content or loc_address or (f"Vị trí: {lat}, {lng}" if lat and lng else "Vị trí địa lý"),
+        content=final_content,
         attachment=attachment,
         attachment_name=attachment_name,
         attachment_size=attachment_size,

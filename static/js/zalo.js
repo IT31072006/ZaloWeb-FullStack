@@ -1250,22 +1250,56 @@ function renderTimeline() {
         </div>
       `;
     } else if (isImageMsg) {
-      const imgUrl = msg.attachment_url || (msg.content && (msg.content.startsWith('/media/') || msg.content.startsWith('http') || msg.content.startsWith('blob:')) ? msg.content : '');
+      const imgUrl = msg.attachment_url || (msg.content && (msg.content.startsWith('/media/') || msg.content.startsWith('http') || msg.content.startsWith('blob:') || msg.content.startsWith('data:')) ? msg.content : '');
+      let captionText = (msg.content || '').trim();
+      const isSystemOrFileLink = !captionText ||
+        captionText === 'Hình ảnh' ||
+        captionText === '[Hình ảnh]' ||
+        captionText === msg.attachment_name ||
+        captionText === msg.attachment_url ||
+        captionText.startsWith('Đã gửi ') ||
+        captionText.startsWith('/media/') ||
+        captionText.startsWith('media/') ||
+        captionText.startsWith('attachments/') ||
+        captionText.startsWith('/attachments/') ||
+        captionText.startsWith('http://') ||
+        captionText.startsWith('https://') ||
+        captionText.startsWith('blob:') ||
+        captionText.startsWith('data:') ||
+        captionText.includes('/attachments/') ||
+        ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => captionText.toLowerCase().endsWith(ext)) ||
+        (msg.attachment_name && captionText.toLowerCase().includes(msg.attachment_name.toLowerCase()));
+
       bodyHtml = `
         <div class="msg-image-card" onclick="openLightbox('${imgUrl}')">
           <img src="${imgUrl}" alt="Hình ảnh" onerror="this.onerror=null; this.src='/static/images/image-placeholder.png';">
         </div>
-        ${msg.content && msg.content !== msg.attachment_name && !msg.content.startsWith('/media/') && !msg.content.startsWith('http') && !msg.content.startsWith('blob:') ? `<div style="margin-top:4px;">${escapeHtml(msg.content)}</div>` : ''}
+        ${!isSystemOrFileLink ? `<div class="msg-image-caption" style="margin-top:4px; font-size:13.5px; line-height:1.4;">${escapeHtml(captionText)}</div>` : ''}
       `;
     } else if (isVideoMsg) {
       const vidUrl = msg.attachment_url || '';
+      let captionText = (msg.content || '').trim();
+      const isSystemOrFileLink = !captionText ||
+        captionText === 'Video' ||
+        captionText === '[Video]' ||
+        captionText === msg.attachment_name ||
+        captionText.startsWith('Đã gửi ') ||
+        captionText.startsWith('/media/') ||
+        captionText.startsWith('media/') ||
+        captionText.startsWith('attachments/') ||
+        captionText.startsWith('/attachments/') ||
+        captionText.startsWith('http') ||
+        captionText.includes('/attachments/') ||
+        ['.mp4', '.mov', '.mkv', '.avi', '.flv', '.wmv', '.m4v', '.webm'].some(ext => captionText.toLowerCase().endsWith(ext)) ||
+        (msg.attachment_name && captionText.toLowerCase().includes(msg.attachment_name.toLowerCase()));
+
       bodyHtml = `
         <div class="msg-video-card" style="max-width:380px; border-radius:10px; overflow:hidden; background:#000; box-shadow:0 3px 12px rgba(0,0,0,0.18);">
           <video controls preload="metadata" playsinline style="width:100%; max-height:280px; display:block; border-radius:10px; outline:none; background:#000;" src="${vidUrl}">
             Trình duyệt không hỗ trợ phát video.
           </video>
         </div>
-        ${msg.content && msg.content !== msg.attachment_name ? `<div style="margin-top:6px; font-size:13.5px; line-height:1.4;">${escapeHtml(msg.content)}</div>` : ''}
+        ${!isSystemOrFileLink ? `<div style="margin-top:6px; font-size:13.5px; line-height:1.4;">${escapeHtml(captionText)}</div>` : ''}
       `;
     } else if (isAudioMsg) {
       const audioUrl = msg.attachment_url || '';
@@ -2250,9 +2284,12 @@ async function uploadVideoMessage(file, captionText = '') {
 async function uploadDocFile(file) {
   if (!file || !state.currentConversationId) return;
 
+  const isImg = (file.type && file.type.startsWith('image/')) ||
+    ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].some(ext => file.name.toLowerCase().endsWith(ext));
   const isVideo = (file.type && file.type.startsWith('video/')) || 
     ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.flv', '.wmv'].some(ext => file.name.toLowerCase().endsWith(ext));
-  if (isVideo) {
+
+  if (isImg || isVideo) {
     handleSelectedImageForPreview(file);
     return;
   }
@@ -3716,7 +3753,7 @@ async function sendPastedImage() {
   const formData = new FormData();
   formData.append('message_type', 'image');
   formData.append('attachment', state.pastedImageFile);
-  formData.append('content', caption || 'Hình ảnh');
+  formData.append('content', caption);
 
   try {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/send/`, {

@@ -830,8 +830,11 @@ class ChatServer:
                                         m_type = "file"
 
                                 caption = packet.get("content", "").strip()
-                                default_caption = f"Đã gửi {'hình ảnh' if m_type == 'image' else ('video' if m_type == 'video' else ('tin nhắn thoại' if m_type == 'audio' else 'tệp'))}: {file_name}"
-                                m_content = caption if caption else default_caption
+                                if m_type in ("image", "video"):
+                                    m_content = caption
+                                else:
+                                    default_caption = f"Đã gửi {'tin nhắn thoại' if m_type == 'audio' else 'tệp'}: {file_name}"
+                                    m_content = caption if caption else default_caption
                                 m_obj = Message(
                                     conversation=c_obj,
                                     sender=u_sender,
@@ -977,11 +980,16 @@ class ChatServer:
                                             m_type = "audio"
                                         else:
                                             m_type = "file"
+                                        caption = packet.get("content", "").strip()
+                                        if is_image or m_type in ("image", "video"):
+                                            m_content = caption
+                                        else:
+                                            m_content = caption if caption else f"Đã gửi tệp (Phân mảnh 64KB + SHA-256 OK): {file_name}"
                                         m_obj = Message(
                                             conversation=c_obj,
                                             sender=u_sender,
                                             message_type=m_type,
-                                            content=f"Đã gửi {'hình ảnh' if is_image else 'tệp'} (Phân mảnh 64KB + SHA-256 OK): {file_name}",
+                                            content=m_content,
                                             attachment_name=file_name,
                                             attachment_size=size_str,
                                         )

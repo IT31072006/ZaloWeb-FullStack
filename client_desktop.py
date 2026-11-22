@@ -342,6 +342,11 @@ class ZaloTCPClient:
                             else:
                                 msg_mtype = "text"
 
+                    if msg_mtype == "image":
+                        fname = packet.get("file_name") or packet.get("attachment_name") or ""
+                        if display_content in (fname, "Hình ảnh", "[Hình ảnh]") or display_content.startswith("Đã gửi hình ảnh:") or display_content.startswith("/media/") or display_content.startswith("http"):
+                            display_content = ""
+
                     ui_msg = {
                         "id": packet.get("message_id") or packet.get("id") or int(time.time()),
                         "conversation_id": conv_id,
