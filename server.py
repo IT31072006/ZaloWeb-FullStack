@@ -84,6 +84,7 @@ class ChatServer:
         self.on_log: Callable[[str, str, str], None] | None = None          # (timestamp, tag, message)
         self.on_clients_update: Callable[[list[dict]], None] | None = None  # (list of client dicts)
         self.on_status_change: Callable[[bool], None] | None = None        # (is_running)
+        self.on_chat_message: Callable[[dict], None] | None = None         # (chat_info dict for live monitoring)
 
     def get_timestamp(self) -> str:
         """Trả về thời gian hiện tại định dạng HH:MM:SS."""
@@ -230,6 +231,14 @@ class ChatServer:
                 data = list(self.clients_info.values())
             try:
                 self.on_clients_update(data)
+            except Exception:
+                pass
+
+    def _notify_chat_message(self, chat_info: dict):
+        """Kích hoạt callback gửi tin nhắn lên GUI giám sát vi phạm."""
+        if self.on_chat_message:
+            try:
+                self.on_chat_message(chat_info)
             except Exception:
                 pass
 
@@ -745,6 +754,24 @@ class ChatServer:
                                     if target_sock:
                                         protocol.send_packet(target_sock, out_packet)
 
+                                # Giải mã nội dung hiển thị trên bảng giám sát Admin GUI (kể cả E2EE)
+                                plain_chat = content
+                                if is_enc and content.startswith("[ENC:AES-256-GCM]"):
+                                    try:
+                                        plain_chat = protocol.decrypt_payload(content[len("[ENC:AES-256-GCM]"):])
+                                    except Exception:
+                                        plain_chat = content
+
+                                self._notify_chat_message({
+                                    "timestamp": self.get_timestamp(),
+                                    "sender": nickname,
+                                    "target": c_obj.name or f"Hội thoại #{conv_id}",
+                                    "message_type": req_msg_type,
+                                    "content": loc_addr or plain_chat,
+                                    "is_encrypted": is_enc,
+                                    "raw_content": content,
+                                })
+
                                 if is_enc:
                                     self._log("CHAT_E2EE", f"[{c_obj.name or conv_id}] 🔒 {nickname} (E2EE AES-256-GCM): {content[:36]}...")
                                 elif req_msg_type == "location":
@@ -764,6 +791,15 @@ class ChatServer:
                             "timestamp": self.get_timestamp(),
                         }
                         self.broadcast(chat_packet)
+                        self._notify_chat_message({
+                            "timestamp": self.get_timestamp(),
+                            "sender": nickname,
+                            "target": "Phòng chung (Broadcast)",
+                            "message_type": "text",
+                            "content": content,
+                            "is_encrypted": is_enc,
+                            "raw_content": content,
+                        })
                         self._log("CHAT", f"{nickname}: {content}")
 
                 # C. Tin nhắn riêng 1-1 qua Socket (Private Message)
@@ -796,6 +832,15 @@ class ChatServer:
                         }
                         protocol.send_packet(target_sock, priv_packet)
                         protocol.send_packet(client_sock, priv_packet)
+                        self._notify_chat_message({
+                            "timestamp": self.get_timestamp(),
+                            "sender": nickname,
+                            "target": f"1-1 -> {target_user}",
+                            "message_type": "private",
+                            "content": content,
+                            "is_encrypted": False,
+                            "raw_content": content,
+                        })
                         self._log("PRIVATE", f"{nickname} -> {target_user}: {content}")
 
                 # D. Gửi tệp tin / hình ảnh đính kèm
@@ -880,6 +925,16 @@ class ChatServer:
                                     if target_sock:
                                         protocol.send_packet(target_sock, file_packet)
 
+                                self._notify_chat_message({
+                                    "timestamp": self.get_timestamp(),
+                                    "sender": nickname,
+                                    "target": c_obj.name or f"Hội thoại #{conv_id}",
+                                    "message_type": m_type,
+                                    "content": f"[{'HÌNH ẢNH' if m_type == 'image' else m_type.upper()}] {file_name} ({size_str})" + (f" - {caption}" if caption else ""),
+                                    "is_encrypted": False,
+                                    "raw_content": file_name,
+                                })
+
                                 self._log("FILE_CONV", f"[{c_obj.name or conv_id}] {nickname} gửi '{file_name}' ({size_str})")
                                 continue
                             except Exception as ex:
@@ -896,6 +951,15 @@ class ChatServer:
                             "timestamp": self.get_timestamp(),
                         }
                         self.broadcast(file_packet)
+                        self._notify_chat_message({
+                            "timestamp": self.get_timestamp(),
+                            "sender": nickname,
+                            "target": "Phòng chung (Broadcast)",
+                            "message_type": "file",
+                            "content": f"[TỆP TIN] {file_name} ({size_str})",
+                            "is_encrypted": False,
+                            "raw_content": file_name,
+                        })
                         self._log("FILE", f"{nickname} gửi tệp '{file_name}' ({size_str})")
 
                 # D.1 KHỞI ĐỘNG TRUYỀN FILE LỚN PHÂN MẢNH (CHUNK 64KB + SHA-256)
@@ -1082,7 +1146,19 @@ class ChatServer:
                     if HAS_DJANGO and msg_id_raw and emoji:
                         try:
                             msg_id = int(msg_id_raw)
-                            m_obj = Message.objects.get(id=msg_id)
+                            m_obj = None
+                            # Nếu msg_id là timestamp tạm thời từ client (> 1000000000000), tìm tin nhắn mới nhất
+                            if msg_id > 1000000000000 and conv_id:
+                                m_obj = Message.objects.filter(conversation_id=conv_id, sender__username=nickname).order_by('-id').first()
+                                if m_obj:
+                                    msg_id = m_obj.id
+                            if not m_obj:
+                                m_obj = Message.objects.filter(id=msg_id).first()
+
+                            if not m_obj:
+                                self._log("WARN", f"Không tìm thấy tin nhắn #{msg_id} để thả cảm xúc")
+                                continue
+
                             u_obj = User.objects.get(username=nickname)
                             if not conv_id:
                                 conv_id = m_obj.conversation_id
@@ -1117,10 +1193,6 @@ class ChatServer:
 
                             if not sent_to_sender:
                                 protocol.send_packet(client_sock, react_packet)
-
-                            self._log("REACTION", f"[{nickname}] thả {emoji} vào tin nhắn #{msg_id}")
-                        except Exception as ex:
-                            self._log("ERROR", f"Lỗi reaction DB: {ex}")
 
                             self._log("REACTION", f"[{nickname}] thả {emoji} vào tin nhắn #{msg_id}")
                         except Exception as ex:
@@ -2503,33 +2575,43 @@ class ChatServer:
                             if c_obj:
                                 mem = c_obj.memberships.filter(user=u_curr).first()
                                 if mem:
+                                    old_last_id = mem.last_read_message_id or 0
+                                    new_last_id = old_last_id
                                     if last_msg_id:
-                                        mem.last_read_message_id = max(mem.last_read_message_id, int(last_msg_id))
+                                        try:
+                                            new_last_id = max(old_last_id, int(last_msg_id))
+                                        except Exception:
+                                            pass
                                     else:
                                         latest = c_obj.messages.last()
                                         if latest:
-                                            mem.last_read_message_id = max(mem.last_read_message_id, latest.id)
-                                    mem.save(update_fields=['last_read_message_id'])
+                                            new_last_id = max(old_last_id, latest.id)
 
-                                    disp_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
-                                    av_url = u_curr.profile.get_avatar_url() if hasattr(u_curr, 'profile') else ""
-                                    rr_packet = {
-                                        "type": "read_receipt",
-                                        "conversation_id": c_obj.id,
-                                        "user_id": u_curr.id,
-                                        "username": u_curr.username,
-                                        "sender": u_curr.username,
-                                        "display_name": disp_name,
-                                        "avatar_url": av_url,
-                                        "last_read_message_id": mem.last_read_message_id,
-                                        "timestamp": self.get_timestamp(),
-                                    }
-                                    # Phát tán gói tin Đã xem (Read Receipt) cho tất cả thành viên khác trong hội thoại
-                                    for m in c_obj.memberships.exclude(user=u_curr).select_related('user').all():
-                                        with self.lock:
-                                            sock = self.clients_by_name.get(m.user.username)
-                                        if sock:
-                                            protocol.send_packet(sock, rr_packet)
+                                    if new_last_id > old_last_id:
+                                        mem.last_read_message_id = new_last_id
+                                        mem.save(update_fields=['last_read_message_id'])
+
+                                        disp_name = u_curr.profile.get_display_name() if hasattr(u_curr, 'profile') else u_curr.username
+                                        av_url = u_curr.profile.get_avatar_url() if hasattr(u_curr, 'profile') else ""
+                                        rr_packet = {
+                                            "type": "read_receipt",
+                                            "conversation_id": c_obj.id,
+                                            "user_id": u_curr.id,
+                                            "username": u_curr.username,
+                                            "sender": u_curr.username,
+                                            "display_name": disp_name,
+                                            "avatar_url": av_url,
+                                            "last_read_message_id": mem.last_read_message_id,
+                                            "timestamp": self.get_timestamp(),
+                                        }
+                                        # Phát tán gói tin Đã xem (Read Receipt) cho tất cả thành viên khác trong hội thoại
+                                        for m in c_obj.memberships.exclude(user=u_curr).select_related('user').all():
+                                            with self.lock:
+                                                sock = self.clients_by_name.get(m.user.username)
+                                            if sock:
+                                                protocol.send_packet(sock, rr_packet)
+
+                                        self._log("READ", f"'{nickname}' đã xem tin nhắn đến ID #{mem.last_read_message_id} trong [{c_obj.name or c_obj.id}]")
 
                                     protocol.send_packet(client_sock, {
                                         "type": protocol.MSG_TYPE_READ_RECEIPT_ACK,
@@ -2537,7 +2619,6 @@ class ChatServer:
                                         "conversation_id": c_obj.id,
                                         "last_read_message_id": mem.last_read_message_id,
                                     })
-                                    self._log("READ", f"'{nickname}' đã xem tin nhắn đến ID #{mem.last_read_message_id} trong [{c_obj.name or c_obj.id}]")
                         except Exception as ex:
                             self._log("ERROR", f"Lỗi cập nhật read receipt: {ex}")
 

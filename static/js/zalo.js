@@ -1274,7 +1274,7 @@ function renderTimeline() {
 
       bodyHtml = `
         <div class="msg-image-card" onclick="openLightbox('${imgUrl}')">
-          <img src="${imgUrl}" alt="Hình ảnh" onerror="this.onerror=null; this.src='/static/images/image-placeholder.png';">
+          <img src="${imgUrl}" alt="Hình ảnh" onload="scrollChatToBottom()" onerror="this.onerror=null; this.src='/static/images/image-placeholder.png';">
         </div>
         ${!isSystemOrFileLink ? `<div class="msg-image-caption" style="margin-top:4px; font-size:13.5px; line-height:1.4;">${escapeHtml(captionText)}</div>` : ''}
       `;
@@ -1456,7 +1456,7 @@ function renderTimeline() {
         return `
           <span class="reaction-pill ${isMine ? 'reacted-by-me' : ''}" 
                 title="${usersTooltip}" 
-                onclick="toggleReaction(${msg.id}, '${r.emoji}')">
+                onclick="event.stopPropagation(); toggleReaction(${msg.id}, '${r.emoji}')">
             ${r.emoji} <span class="react-count">${r.count}</span>
           </span>
         `;
@@ -1468,12 +1468,12 @@ function renderTimeline() {
     const actionsToolbarHtml = `
       <div class="msg-actions-toolbar">
         <div class="quick-reactions">
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '❤️')" title="Yêu thích">❤️</button>
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '👍')" title="Thích">👍</button>
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '😂')" title="Haha">😂</button>
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '😮')" title="Wow">😮</button>
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '😢')" title="Buồn">😢</button>
-          <button type="button" class="react-btn" onclick="toggleReaction(${msg.id}, '😡')" title="Phẫn nộ">😡</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '❤️')" title="Yêu thích">❤️</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '👍')" title="Thích">👍</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '😂')" title="Haha">😂</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '😮')" title="Wow">😮</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '😢')" title="Buồn">😢</button>
+          <button type="button" class="react-btn" onclick="event.stopPropagation(); toggleReaction(${msg.id}, '😡')" title="Phẫn nộ">😡</button>
         </div>
         <div class="action-divider"></div>
         <button type="button" class="msg-action-icon-btn" onclick="startReplyMessage(${msg.id})" title="Trả lời">
@@ -1639,27 +1639,34 @@ function triggerFloatingReaction(msgId, emoji) {
 }
 
 // Mark as read (Read receipts)
+const lastMarkedReadMap = {};
 function sendMarkRead(messageId) {
   if (!messageId || !state.currentConversationId) return;
+  const convId = state.currentConversationId;
+  const numId = parseInt(messageId);
+  if (numId && lastMarkedReadMap[convId] && lastMarkedReadMap[convId] >= numId) {
+    return; // Đã đánh dấu xem tin nhắn này rồi, tránh gửi lặp lại
+  }
+  if (numId) lastMarkedReadMap[convId] = numId;
 
   // Send via WebSocket (0ms)
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
       type: 'mark_read',
       conversation_id: state.currentConversationId,
-      last_message_id: messageId
+      last_message_id: numId || messageId
     }));
+  } else {
+    // Chỉ fallback gọi API HTTP khi WebSocket chưa kết nối
+    fetch(`/api/conversations/${state.currentConversationId}/mark_read/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken')
+      },
+      body: JSON.stringify({ last_message_id: numId || messageId })
+    }).catch(() => {});
   }
-
-  // Also call API
-  fetch(`/api/conversations/${state.currentConversationId}/mark_read/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRFToken': getCookie('csrftoken')
-    },
-    body: JSON.stringify({ last_message_id: messageId })
-  }).catch(() => {});
 }
 
 // Update read statuses in timeline dynamically
@@ -1719,10 +1726,14 @@ function updateTimelineReadStatuses() {
 
 async function toggleReaction(msgId, emoji) {
   if (!state.currentConversationId) return;
-  triggerFloatingReaction(msgId, emoji);
+
+  // Tìm ID thực tế nếu là tin nhắn có temp_id
+  const targetMsg = state.messages.find(m => m.id === msgId || m.temp_id === msgId || parseInt(m.id) === parseInt(msgId));
+  const effectiveId = (targetMsg && targetMsg.id && targetMsg.id < 1000000000000) ? targetMsg.id : msgId;
+
+  triggerFloatingReaction(effectiveId, emoji);
 
   // ✨ Hiển thị ngay biểu tượng cảm xúc dưới tin nhắn (0ms Optimistic UI)
-  const targetMsg = state.messages.find(m => parseInt(m.id) === parseInt(msgId));
   if (targetMsg) {
     if (!targetMsg.reactions) targetMsg.reactions = [];
     const currentUsername = state.currentUser ? state.currentUser.username : '';
@@ -1750,35 +1761,33 @@ async function toggleReaction(msgId, emoji) {
     renderTimeline();
   }
 
-  // Gửi lập tức qua Socket TCP
+  // Gửi duy nhất 1 kênh: Nếu WebSocket đang mở -> gửi qua Socket TCP.
+  // Tuyệt đối không gửi trùng lặp cả Socket lẫn HTTP fetch để tránh bị bật rồi tắt lại!
   if (state.chatSocket && state.chatSocket.readyState === WebSocket.OPEN) {
     state.chatSocket.send(JSON.stringify({
       type: 'REACTION',
-      message_id: msgId,
+      message_id: effectiveId,
       emoji: emoji,
       conversation_id: state.currentConversationId
     }));
-  }
-
-  try {
-    const res = await fetch(`/api/messages/${msgId}/react/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': getCookie('csrftoken'),
-      },
-      body: JSON.stringify({ emoji: emoji, conversation_id: state.currentConversationId })
-    });
-    const data = await res.json();
-    if (res.ok && data.reactions) {
-      const msg = state.messages.find(m => parseInt(m.id) === parseInt(msgId));
-      if (msg) {
-        msg.reactions = data.reactions;
+  } else {
+    try {
+      const res = await fetch(`/api/messages/${effectiveId}/react/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: JSON.stringify({ emoji: emoji, conversation_id: state.currentConversationId })
+      });
+      const data = await res.json();
+      if (res.ok && data.reactions && targetMsg) {
+        targetMsg.reactions = data.reactions;
         renderTimeline();
       }
+    } catch (err) {
+      console.error("Lỗi thả cảm xúc HTTP:", err);
     }
-  } catch (err) {
-    console.error("Lỗi thả cảm xúc:", err);
   }
 }
 
@@ -1942,20 +1951,20 @@ function copyMessageContent(msgId) {
 
 function scrollChatToBottom(smooth = false) {
   const timeline = document.getElementById('chatTimeline');
-  if (timeline) {
-    if (smooth) {
-      timeline.scrollTo({ top: timeline.scrollHeight, behavior: 'smooth' });
-    } else {
-      timeline.scrollTop = timeline.scrollHeight;
+  if (!timeline) return;
+
+  const doScroll = () => {
+    timeline.scrollTop = timeline.scrollHeight;
+    if (timeline.lastElementChild) {
+      timeline.lastElementChild.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
     }
-    // Giữ màn hình luôn cuộn sát đáy xem tin mới nhất, không bị nhích lên
-    requestAnimationFrame(() => {
-      timeline.scrollTop = timeline.scrollHeight;
-    });
-    setTimeout(() => {
-      timeline.scrollTop = timeline.scrollHeight;
-    }, 40);
-  }
+  };
+
+  doScroll();
+  requestAnimationFrame(doScroll);
+  setTimeout(doScroll, 40);
+  setTimeout(doScroll, 120);
+  setTimeout(doScroll, 300);
 }
 
 function copyCode(btn) {
@@ -3884,14 +3893,32 @@ function handleWebSocketMessage(data) {
     // 1. Kiểm tra nếu là tin nhắn do chính mình gửi vừa được hiển thị optimistic
     const existingIndex = state.messages.findIndex(m => 
       m.id === newMsg.id || 
-      (m.is_me && m.content === newMsg.content && Math.abs(new Date(m.created_at) - new Date(newMsg.created_at || Date.now())) < 10000)
+      (m.is_me && (
+        (m.content && m.content === newMsg.content) ||
+        (m.attachment_name && m.attachment_name === newMsg.attachment_name) ||
+        (m.message_type === newMsg.message_type && Math.abs(new Date(m.created_at || 0) - new Date(newMsg.created_at || Date.now())) < 15000)
+      ))
     );
 
     if (existingIndex !== -1) {
-      // Cập nhật ID chính thức từ server, không thêm trùng lặp
+      // Cập nhật ID chính thức từ server, đồng thời cập nhật data-msg-id trong DOM
+      const oldId = state.messages[existingIndex].id;
       state.messages[existingIndex].id = newMsg.id;
+      state.messages[existingIndex].temp_id = oldId;
       if (newMsg.formatted_time) state.messages[existingIndex].formatted_time = newMsg.formatted_time;
       if (newMsg.attachment_url) state.messages[existingIndex].attachment_url = newMsg.attachment_url;
+
+      // Cập nhật lại DOM row để các nút reaction và menu thao tác nhận đúng ID thực tế của CSDL
+      const oldRow = document.querySelector(`.message-row[data-msg-id="${oldId}"]`);
+      if (oldRow) {
+        oldRow.dataset.msgId = newMsg.id;
+        oldRow.querySelectorAll('.react-btn, .reaction-pill, .msg-action-icon-btn, .msg-more-item').forEach(el => {
+          const onclickAttr = el.getAttribute('onclick');
+          if (onclickAttr && onclickAttr.includes(String(oldId))) {
+            el.setAttribute('onclick', onclickAttr.replaceAll(String(oldId), String(newMsg.id)));
+          }
+        });
+      }
     } else {
       // 2. Tin nhắn mới từ đối phương hoặc tin nhắn đến cuộc trò chuyện hiện tại
       if (parseInt(newMsg.conversation_id) === parseInt(state.currentConversationId)) {

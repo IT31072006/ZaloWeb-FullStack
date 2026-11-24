@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextEdit, QFrame, QCheckBox, QMessageBox, QFileDialog,
-    QSplitter, QProgressBar
+    QSplitter, QProgressBar, QTabWidget, QMenu
 )
 
 # Tải cấu hình và lõi ChatServer
@@ -84,14 +84,15 @@ class ServerBridge(QObject):
     sig_clients = pyqtSignal(list)          # list of client info dicts
     sig_status = pyqtSignal(bool)           # is_running
     sig_web_status = pyqtSignal(bool)       # is_web_running
+    sig_chat = pyqtSignal(dict)             # chat_info for live violation monitoring
 
 
 class ServerMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Zalo Chat Server - Bảng Quản Trị Máy Chủ TCP & Web (Lập Trình Mạng)")
-        self.resize(1180, 750)
-        self.setMinimumSize(950, 600)
+        self.setWindowTitle("VKU NetChat Server - Bảng Quản Trị Máy Chủ TCP & Web (Lập Trình Mạng)")
+        self.resize(1240, 780)
+        self.setMinimumSize(1000, 650)
 
         self.bridge = ServerBridge()
         self.server: ChatServer | None = None
@@ -99,12 +100,17 @@ class ServerMainWindow(QMainWindow):
         self.daphne_proc: subprocess.Popen | None = None
         self.start_time: float | None = None
 
+        # Lưu lịch sử chat để lọc và giám sát vi phạm
+        self.chat_messages_history: list[dict] = []
+        self.selected_chat_user: str | None = None
+
         self.bridge.sig_log.connect(self.on_receive_log)
         self.bridge.sig_clients.connect(self.on_receive_clients)
         self.bridge.sig_status.connect(self.on_status_changed)
         self.bridge.sig_web_status.connect(self.on_web_status_changed)
+        self.bridge.sig_chat.connect(self.on_receive_chat_message)
 
-        # Timer cập nhật Uptime
+        # Timer cập nhật Uptime & Đồng bộ Client online liên tục
         self.uptime_timer = QTimer(self)
         self.uptime_timer.timeout.connect(self.update_uptime)
         self.uptime_timer.start(1000)
@@ -113,10 +119,13 @@ class ServerMainWindow(QMainWindow):
         self.apply_styles()
 
         # Log khởi động ban đầu
-        self.add_log_entry("SYSTEM", "Giao diện Quản trị Máy chủ Zalo Chat đã sẵn sàng.")
+        self.add_log_entry("SYSTEM", "Giao diện Quản trị Máy chủ VKU NetChat đã sẵn sàng.")
         self.add_log_entry("NETWORK", f"Địa chỉ IP LAN của máy chủ: {self.lan_ip}")
         self.add_log_entry("GUIDE", f"👉 Máy bạn bè kết nối qua link: http://{self.lan_ip}:8000")
         self.add_log_entry("DB", f"Cơ sở dữ liệu đang liên kết: {DB_ENGINE} ({DB_NAME})")
+
+        # Tự động khởi động máy chủ TCP khi mở GUI
+        QTimer.singleShot(250, self.start_all_servers)
 
     # ==========================================================================
     # GIAO DIỆN NGƯỜI DÙNG (UI)
@@ -136,7 +145,7 @@ class ServerMainWindow(QMainWindow):
         control_card = self.create_controls()
         main_layout.addWidget(control_card)
 
-        # 3. SPLITTER (BẢNG CLIENT + LIVE LOG)
+        # 3. SPLITTER (BẢNG CLIENT + TAB GIÁM SÁT CHAT & LIVE LOG)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(8)
 
@@ -144,9 +153,9 @@ class ServerMainWindow(QMainWindow):
         clients_panel = self.create_clients_panel()
         splitter.addWidget(clients_panel)
 
-        # Cột phải: Khung Console Log trực quan
-        log_panel = self.create_log_panel()
-        splitter.addWidget(log_panel)
+        # Cột phải: Khung Tab Giám sát Hội Thoại Live & Console Log
+        right_panel = self.create_right_panel()
+        splitter.addWidget(right_panel)
 
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 6)
@@ -332,12 +341,87 @@ class ServerMainWindow(QMainWindow):
         layout.addLayout(broadcast_box)
         return panel
 
-    def create_log_panel(self) -> QWidget:
+    def create_right_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panelFrame")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self.tab_widget = QTabWidget()
+
+        # Tab 1: Giám Sát Tin Nhắn Trực Tiếp & Kiểm Duyệt Vi Phạm
+        chat_tab = self.create_chat_monitor_tab()
+        self.tab_widget.addTab(chat_tab, "💬 Giám Sát Tin Nhắn (Live Chat & Vi Phạm)")
+
+        # Tab 2: Nhật Ký Kỹ Thuật Máy Chủ
+        log_tab = self.create_log_tab()
+        self.tab_widget.addTab(log_tab, "📜 Nhật Ký Hoạt Động (Server Logs)")
+
+        layout.addWidget(self.tab_widget)
+        return panel
+
+    def create_chat_monitor_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(8)
+
+        # Thanh công cụ trên
+        top_bar = QHBoxLayout()
+        self.txt_chat_filter = QLineEdit()
+        self.txt_chat_filter.setPlaceholderText("🔍 Tìm theo tên người gửi, phòng chat hoặc từ khóa vi phạm...")
+        self.txt_chat_filter.textChanged.connect(self.filter_chat_messages)
+        top_bar.addWidget(self.txt_chat_filter, 1)
+
+        self.btn_kick_chat_sender = QPushButton("🚫 Kick Người Này")
+        self.btn_kick_chat_sender.setObjectName("btnKick")
+        self.btn_kick_chat_sender.setEnabled(False)
+        self.btn_kick_chat_sender.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_kick_chat_sender.clicked.connect(self.kick_chat_selected_user)
+        top_bar.addWidget(self.btn_kick_chat_sender)
+
+        btn_clear_chat = QPushButton("🗑️ Xóa Lịch Sử")
+        btn_clear_chat.setObjectName("btnSmall")
+        btn_clear_chat.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clear_chat.clicked.connect(self.clear_chat_monitor)
+        top_bar.addWidget(btn_clear_chat)
+
+        layout.addLayout(top_bar)
+
+        # Bảng giám sát tin nhắn chi tiết
+        self.table_chat_monitor = QTableWidget()
+        self.table_chat_monitor.setColumnCount(6)
+        self.table_chat_monitor.setHorizontalHeaderLabels([
+            "Thời gian", "Người gửi", "Gửi tới / Nhóm", "Loại tin", "Nội dung tin nhắn (Đã giải mã E2EE)", "Bảo mật"
+        ])
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table_chat_monitor.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_chat_monitor.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table_chat_monitor.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_chat_monitor.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table_chat_monitor.itemSelectionChanged.connect(self.on_chat_row_selected)
+        self.table_chat_monitor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table_chat_monitor.customContextMenuRequested.connect(self.show_chat_context_menu)
+
+        layout.addWidget(self.table_chat_monitor, 1)
+
+        # Ghi chú quản trị viên
+        lbl_hint = QLabel("💡 Mẹo Admin: Nhấp vào tin nhắn có dấu hiệu vi phạm (từ tục, spam, lừa đảo) rồi bấm 'Kick Người Này' để bảo vệ phòng chat.")
+        lbl_hint.setStyleSheet("font-size: 11px; color: #64748b; font-style: italic;")
+        layout.addWidget(lbl_hint)
+
+        return widget
+
+    def create_log_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(8)
 
         # Header Log
         top_bar = QHBoxLayout()
@@ -366,7 +450,7 @@ class ServerMainWindow(QMainWindow):
         self.log_viewer.setObjectName("logViewer")
         layout.addWidget(self.log_viewer, 1)
 
-        return panel
+        return widget
 
     def create_footer_status(self) -> QWidget:
         footer = QWidget()
@@ -408,6 +492,7 @@ class ServerMainWindow(QMainWindow):
         self.server.on_log = lambda ts, tag, msg: self.bridge.sig_log.emit(ts, tag, msg)
         self.server.on_clients_update = lambda clients: self.bridge.sig_clients.emit(clients)
         self.server.on_status_change = lambda status: self.bridge.sig_status.emit(status)
+        self.server.on_chat_message = lambda chat_info: self.bridge.sig_chat.emit(chat_info)
 
         self.server_thread = threading.Thread(target=self._run_socket_server, daemon=True)
         self.server_thread.start()
@@ -615,6 +700,178 @@ class ServerMainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Lỗi", f"Không thể lưu file: {e}")
 
+    VIOLATION_KEYWORDS = [
+        "đm", "dm", "chửi", "lừa đảo", "scam", "hack", "spam", "clmm", "dcm",
+        "dmm", "vcl", "fuck", "bitch", "ngu", "chó", "chó chết", "vi phạm"
+    ]
+
+    def on_receive_chat_message(self, chat_info: dict):
+        """Tiếp nhận tin nhắn mới từ Socket để hiển thị trên bảng Giám sát vi phạm."""
+        self.chat_messages_history.append(chat_info)
+        if len(self.chat_messages_history) > 500:
+            self.chat_messages_history.pop(0)
+
+        query = self.txt_chat_filter.text().strip().lower()
+        if query:
+            content = str(chat_info.get("content", "")).lower()
+            sender = str(chat_info.get("sender", "")).lower()
+            target = str(chat_info.get("target", "")).lower()
+            if query not in content and query not in sender and query not in target:
+                return
+
+        self._append_chat_row(chat_info)
+
+    def _append_chat_row(self, chat_info: dict):
+        row = self.table_chat_monitor.rowCount()
+        self.table_chat_monitor.insertRow(row)
+
+        ts = chat_info.get("timestamp", "")
+        sender = chat_info.get("sender", "")
+        target = chat_info.get("target", "")
+        m_type = chat_info.get("message_type", "text")
+        content = chat_info.get("content", "")
+        is_enc = chat_info.get("is_encrypted", False)
+
+        # Kiểm tra từ khóa vi phạm
+        is_violation = False
+        content_lower = str(content).lower()
+        for kw in self.VIOLATION_KEYWORDS:
+            if kw in content_lower:
+                is_violation = True
+                break
+
+        type_label = {
+            "text": "📝 Văn bản",
+            "image": "🖼️ Hình ảnh",
+            "video": "🎬 Video",
+            "audio": "🎙️ Thoại",
+            "file": "📄 Tệp tin",
+            "code": "💻 Mã nguồn",
+            "location": "📍 Vị trí",
+            "call": "📞 Cuộc gọi",
+            "private": "🔒 Riêng tư",
+        }.get(m_type, f"🏷️ {m_type}")
+
+        if is_violation:
+            type_label = f"⚠️ VI PHẠM | {type_label}"
+
+        item_ts = QTableWidgetItem(ts)
+        item_sender = QTableWidgetItem(f"👤 {sender}")
+        item_sender.setFont(QFont("-apple-system", 10, QFont.Weight.Bold))
+        item_target = QTableWidgetItem(target)
+        item_type = QTableWidgetItem(type_label)
+        item_content = QTableWidgetItem(str(content))
+        item_enc = QTableWidgetItem("🔒 AES-256-GCM" if is_enc else "🌐 Plain")
+
+        item_ts.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item_sender.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item_target.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item_type.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item_enc.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Đổi màu cảnh báo nổi bật nếu có dấu hiệu vi phạm
+        if is_violation:
+            warn_bg = QColor("#fef2f2")
+            warn_fg = QColor("#b91c1c")
+            for item in (item_ts, item_sender, item_target, item_type, item_content, item_enc):
+                item.setBackground(warn_bg)
+                item.setForeground(warn_fg)
+        elif is_enc:
+            enc_fg = QColor("#0284c7")
+            item_enc.setForeground(enc_fg)
+
+        self.table_chat_monitor.setItem(row, 0, item_ts)
+        self.table_chat_monitor.setItem(row, 1, item_sender)
+        self.table_chat_monitor.setItem(row, 2, item_target)
+        self.table_chat_monitor.setItem(row, 3, item_type)
+        self.table_chat_monitor.setItem(row, 4, item_content)
+        self.table_chat_monitor.setItem(row, 5, item_enc)
+
+        self.table_chat_monitor.scrollToBottom()
+
+    def filter_chat_messages(self, text: str):
+        query = text.strip().lower()
+        self.table_chat_monitor.setRowCount(0)
+        for chat_info in self.chat_messages_history:
+            if not query:
+                self._append_chat_row(chat_info)
+            else:
+                content = str(chat_info.get("content", "")).lower()
+                sender = str(chat_info.get("sender", "")).lower()
+                target = str(chat_info.get("target", "")).lower()
+                if query in content or query in sender or query in target:
+                    self._append_chat_row(chat_info)
+
+    def on_chat_row_selected(self):
+        row = self.table_chat_monitor.currentRow()
+        if row >= 0:
+            item_sender = self.table_chat_monitor.item(row, 1)
+            if item_sender:
+                username = item_sender.text().replace("👤 ", "").strip()
+                self.selected_chat_user = username
+                self.btn_kick_chat_sender.setText(f"🚫 Kick '{username}'")
+                self.btn_kick_chat_sender.setEnabled(True)
+                return
+        self.selected_chat_user = None
+        self.btn_kick_chat_sender.setText("🚫 Kick Người Này")
+        self.btn_kick_chat_sender.setEnabled(False)
+
+    def kick_chat_selected_user(self):
+        if not self.selected_chat_user:
+            return
+        username = self.selected_chat_user
+        if not self.server or not self.server.is_running:
+            QMessageBox.warning(self, "Cảnh báo", "Máy chủ hiện chưa hoạt động.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Xác nhận Kick Người Dùng Vi Phạm",
+            f"Bạn có chắc chắn muốn ngắt kết nối và kick tài khoản '{username}' do vi phạm nội quy chat không?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            success = self.server.kick_client(username, "Bị Quản trị viên kick vì vi phạm quy định trò chuyện.")
+            if success:
+                self.add_log_entry("KICK", f"Đã kick tài khoản vi phạm '{username}' thành công!")
+                QMessageBox.information(self, "Đã Kick", f"Tài khoản '{username}' đã bị ngắt kết nối khỏi máy chủ!")
+            else:
+                QMessageBox.warning(self, "Lỗi", f"Không tìm thấy kết nối socket của '{username}' để kick.")
+
+    def show_chat_context_menu(self, pos):
+        item = self.table_chat_monitor.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        item_sender = self.table_chat_monitor.item(row, 1)
+        item_content = self.table_chat_monitor.item(row, 4)
+        if not item_sender:
+            return
+        username = item_sender.text().replace("👤 ", "").strip()
+        content = item_content.text() if item_content else ""
+
+        menu = QMenu(self)
+        act_kick = menu.addAction(f"🚫 Kick tài khoản '{username}'")
+        act_warn = menu.addAction(f"⚠️ Phát cảnh cáo tài khoản '{username}'")
+        act_copy = menu.addAction("📋 Sao chép nội dung tin nhắn")
+
+        action = menu.exec(self.table_chat_monitor.viewport().mapToGlobal(pos))
+        if action == act_kick:
+            self.selected_chat_user = username
+            self.kick_chat_selected_user()
+        elif action == act_warn:
+            if self.server and self.server.is_running:
+                self.server.send_server_broadcast(f"⚠️ [CẢNH CÁO HỆ THỐNG] Người dùng '{username}' hãy chú ý ngôn từ chuẩn mực.")
+                self.add_log_entry("ADMIN", f"Đã gửi cảnh cáo vi phạm tới '{username}'.")
+        elif action == act_copy:
+            QApplication.clipboard().setText(content)
+
+    def clear_chat_monitor(self):
+        self.chat_messages_history.clear()
+        self.table_chat_monitor.setRowCount(0)
+        self.btn_kick_chat_sender.setEnabled(False)
+        self.btn_kick_chat_sender.setText("🚫 Kick Người Này")
+
     def update_uptime(self):
         if self.start_time and self.server and self.server.is_running:
             elapsed = int(time.time() - self.start_time)
@@ -622,6 +879,10 @@ class ServerMainWindow(QMainWindow):
             mins = (elapsed % 3600) // 60
             secs = elapsed % 60
             self.lbl_uptime.setText(f"⏱️ Thời gian hoạt động: {hrs:02d}:{mins:02d}:{secs:02d}")
+            # Đồng bộ danh sách client online liên tục mỗi giây
+            with self.server.lock:
+                clients_list = list(self.server.clients_info.values())
+            self.on_receive_clients(clients_list)
         else:
             self.lbl_uptime.setText("⏱️ Thời gian hoạt động: 00:00:00")
 
@@ -782,6 +1043,29 @@ class ServerMainWindow(QMainWindow):
                 background-color: #ffffff;
                 gridline-color: #f1f5f9;
                 font-size: 12px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #e2e8f0;
+                background-color: #ffffff;
+                border-radius: 8px;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #f1f5f9;
+                color: #475569;
+                font-weight: bold;
+                font-size: 12px;
+                padding: 7px 16px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 3px;
+                border: 1px solid #e2e8f0;
+                border-bottom: none;
+            }
+            QTabBar::tab:selected {
+                background: #ffffff;
+                color: #0068ff;
+                border-bottom: 2px solid #0068ff;
             }
             QHeaderView::section {
                 background-color: #f8fafc;
