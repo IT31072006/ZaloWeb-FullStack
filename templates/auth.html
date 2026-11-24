@@ -4,40 +4,88 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Đăng nhập & Đăng ký - Zalo Desktop Socket TCP</title>
-  <link rel="icon" href="https://zalo-api.zadn.vn/favicon.ico" type="image/x-icon">
+  <title>Đăng nhập & Đăng ký - VKU NetChat (Socket TCP 5555)</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
   <link rel="stylesheet" href="{% static 'css/zalo.css' %}">
   <style>
+    * {
+      box-sizing: border-box;
+    }
     body {
-      background: linear-gradient(135deg, #0068ff 0%, #0091ff 100%);
+      background: linear-gradient(135deg, #0b3c6d 0%, #0068ff 100%);
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 100vh;
       margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
     .auth-page-box {
       background: #ffffff;
       border-radius: 16px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
       width: 100%;
       max-width: 440px;
       padding: 32px;
+      box-sizing: border-box;
+      overflow: hidden;
     }
     .auth-brand {
       text-align: center;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
     }
     .auth-brand h1 {
       color: #0068ff;
-      font-size: 32px;
+      font-size: 30px;
       font-weight: 800;
-      letter-spacing: -1px;
+      letter-spacing: -0.5px;
+      margin: 4px 0 0 0;
     }
     .auth-brand p {
-      color: #72808e;
+      color: #64748b;
+      font-size: 13.5px;
+      margin: 6px 0 0 0;
+    }
+    .network-config-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .form-group-item {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .form-group-item label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .form-group-item input {
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+      box-sizing: border-box !important;
+      padding: 9px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
       font-size: 14px;
-      margin-top: 4px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .form-group-item input:focus {
+      border-color: #0068ff;
+      box-shadow: 0 0 0 3px rgba(0, 104, 255, 0.15);
     }
     .back-home-link {
       display: block;
@@ -48,13 +96,17 @@
       font-size: 13.5px;
       font-weight: 600;
     }
+    .back-home-link:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
   <div class="auth-page-box">
     <div class="auth-brand">
-      <h1>Zalo</h1>
-      <p>Đăng nhập tài khoản Zalo để kết nối với bạn bè</p>
+      <div style="font-size: 38px; line-height: 1;">🌐</div>
+      <h1>VKU NetChat</h1>
+      <p>Hệ thống Nhắn tin & Gọi thoại Bảo mật Socket TCP (LTM)</p>
     </div>
 
     <!-- Tabs -->
@@ -69,14 +121,14 @@
       <div id="authAlertBox" style="display:none; padding:10px 14px; border-radius:8px; margin-bottom:14px; font-size:13px; font-weight:600; text-align:center;"></div>
 
       <!-- Network Server Config (Địa chỉ IP và Cổng Port môn Lập trình Mạng) -->
-      <div style="display: flex; gap: 10px; margin-bottom: 14px;">
-        <div class="form-group-item" style="flex: 2;">
+      <div class="network-config-grid">
+        <div class="form-group-item">
           <label>Địa chỉ IP Máy chủ (Server IP)</label>
-          <input type="text" id="authServerIp" value="127.0.0.1" placeholder="127.0.0.1 hoặc IP LAN" style="padding: 10px 14px;">
+          <input type="text" id="authServerIp" value="127.0.0.1" placeholder="127.0.0.1 hoặc IP LAN">
         </div>
-        <div class="form-group-item" style="flex: 1;">
+        <div class="form-group-item">
           <label>Cổng Port</label>
-          <input type="text" id="authServerPort" value="8000" placeholder="8000" style="padding: 10px 14px;">
+          <input type="text" id="authServerPort" value="5555" placeholder="5555">
         </div>
       </div>
 
@@ -124,17 +176,20 @@
   </div>
 
   <div class="zalo-toast-container" id="toastContainer"></div>
-  <script src="{% static 'js/zalo.js' %}?v=20261020_v6"></script>
+  <script src="{% static 'js/zalo.js' %}?v=20261124_v1"></script>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
-      // Tự động điền IP và Port thực tế từ URL trình duyệt
+      // Luôn đặt mặc định IP là 127.0.0.1 và Cổng Port Socket TCP là 5555
       const ipInput = document.getElementById('authServerIp');
       const portInput = document.getElementById('authServerPort');
-      if (ipInput && window.location.hostname) {
-        ipInput.value = window.location.hostname;
+      if (ipInput) {
+        const savedIp = localStorage.getItem('vku_server_ip') || localStorage.getItem('zalo_server_ip') || '127.0.0.1';
+        ipInput.value = savedIp;
       }
-      if (portInput && window.location.port) {
-        portInput.value = window.location.port;
+      if (portInput) {
+        const savedPort = localStorage.getItem('vku_server_port') || localStorage.getItem('zalo_server_port');
+        // Luôn giữ cổng mặc định là 5555 của Server TCP LTM, loại trừ port 48000 của Webview hoặc 8000 cũ
+        portInput.value = (savedPort && savedPort !== '48000' && savedPort !== '8000') ? savedPort : '5555';
       }
 
       // Hỗ trợ phím Enter để gửi Form

@@ -4,8 +4,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zalo Desktop - Socket TCP 5555</title>
-  <link rel="icon" href="https://zalo-api.zadn.vn/favicon.ico" type="image/x-icon">
+  <title>VKU NetChat - Socket TCP 5555</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
   <link rel="stylesheet" href="{% static 'css/zalo.css' %}?v=20261020_v6">
 </head>
 <body>
@@ -147,10 +147,10 @@
       <header class="chat-header">
         <div class="chat-header-left">
           <div class="chat-header-avatar">
-            <img id="currentChatAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'><circle cx='32' cy='32' r='32' fill='%230068ff'/><text x='50%25' y='54%25' font-family='sans-serif' font-size='22' font-weight='700' fill='%23ffffff' dominant-baseline='middle' text-anchor='middle'>ZL</text></svg>" alt="">
+            <img id="currentChatAvatar" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'><circle cx='32' cy='32' r='32' fill='%230068ff'/><text x='50%25' y='54%25' font-family='sans-serif' font-size='20' font-weight='700' fill='%23ffffff' dominant-baseline='middle' text-anchor='middle'>NC</text></svg>" alt="">
           </div>
           <div class="chat-header-info">
-            <h2 class="chat-title-text" id="currentChatTitle">Zalo Chat</h2>
+            <h2 class="chat-title-text" id="currentChatTitle">VKU NetChat</h2>
             <span class="chat-subtitle-text" id="currentChatSubtitle">
               <span class="online-indicator"></span> Kết nối Socket TCP
             </span>
@@ -586,7 +586,7 @@
   <div class="modal-overlay" id="authModal">
     <div class="zalo-modal-card" style="max-width: 440px;">
       <div class="modal-header">
-        <h3 id="authModalTitle">Đăng nhập Zalo</h3>
+        <h3 id="authModalTitle">Đăng nhập VKU NetChat</h3>
         <button class="modal-close-btn" onclick="closeModal('authModal')">&times;</button>
       </div>
       <div class="modal-body">
@@ -599,14 +599,14 @@
         <!-- Form Fields -->
         <form id="authForm" onsubmit="return false;">
           <!-- Network Server Config (Địa chỉ IP và Cổng Port môn Lập trình Mạng) -->
-          <div style="display: flex; gap: 10px; margin-bottom: 12px;">
-            <div class="form-group-item" style="flex: 2;">
+          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 12px; width: 100%; box-sizing: border-box;">
+            <div class="form-group-item" style="min-width: 0;">
               <label>Địa chỉ IP Máy chủ (Server IP)</label>
               <input type="text" id="authServerIp" value="127.0.0.1" placeholder="127.0.0.1 hoặc IP LAN">
             </div>
-            <div class="form-group-item" style="flex: 1;">
+            <div class="form-group-item" style="min-width: 0;">
               <label>Cổng Port</label>
-              <input type="text" id="authServerPort" value="8000" placeholder="8000">
+              <input type="text" id="authServerPort" value="5555" placeholder="5555">
             </div>
           </div>
 
@@ -699,7 +699,7 @@
         <div id="friendSearchResultArea" class="friend-search-result-area">
           <div class="phone-search-tip">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-            <span>Nhập số điện thoại để tìm kiếm bạn bè trên Zalo</span>
+            <span>Nhập số điện thoại để tìm kiếm bạn bè trên VKU NetChat</span>
           </div>
         </div>
 
@@ -880,7 +880,7 @@
   <div class="modal-overlay" id="settingsModal">
     <div class="zalo-modal-card" style="max-width: 520px;">
       <div class="modal-header">
-        <h3>Cài đặt Zalo Web</h3>
+        <h3>Cài đặt VKU NetChat</h3>
         <button class="modal-close-btn" onclick="closeModal('settingsModal')">&times;</button>
       </div>
       <div class="modal-body">
@@ -911,7 +911,7 @@
         <div class="settings-group" style="margin-top: 16px;">
           <h4>Thông tin Hệ thống & Đồ án</h4>
           <div class="system-status-box">
-            <div>🚀 <strong>Nền tảng:</strong> Zalo Web Single Page App (Pure HTML5 + Vanilla JS + CSS3)</div>
+            <div>🚀 <strong>Nền tảng:</strong> VKU NetChat Desktop Single Page App (Pure HTML5 + Vanilla JS + CSS3)</div>
             <div>⚙️ <strong>Backend:</strong> Django 5 + Django Channels 4 + ASGI Daphne</div>
             <div>🗄️ <strong>Cơ sở dữ liệu:</strong> PostgreSQL / SQLite Database</div>
             <div>⚡ <strong>Giao thức Mạng:</strong> WebSocket (ws:// 0ms latency) + Dual-Engine HTTP Fallback</div>

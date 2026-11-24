@@ -1233,6 +1233,9 @@ body.dark-theme .call-card-retry-btn:hover {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .form-group-item label {
   font-size: 12.5px;
@@ -1242,6 +1245,10 @@ body.dark-theme .call-card-retry-btn:hover {
 .form-group-item input,
 .form-group-item textarea,
 .form-group-item select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 8px 12px;
   border: 1px solid var(--zalo-border);
   border-radius: 6px;

@@ -1653,7 +1653,7 @@ def main():
                 server_host = args[1].strip()
 
     print("=" * 70)
-    print("🚀 KHỞI ĐỘNG ZALO DESKTOP CLIENT (100% TCP SOCKET :5555)")
+    print("🚀 KHỞI ĐỘNG VKU NETCHAT DESKTOP (100% TCP SOCKET :5555)")
     print("=" * 70)
     print(f"  📡 Máy chủ Socket TCP: {server_host}:{server_port}")
     print(f"  👤 Profile người dùng: {profile_num}")
@@ -1717,15 +1717,15 @@ def main():
                 pass
 
         try:
-            print(f"[*] Mở cửa sổ Zalo PC qua {os.path.basename(browser_bin)} (App Mode)...")
+            print(f"[*] Mở cửa sổ VKU NetChat qua {os.path.basename(browser_bin)} (App Mode)...")
             cmd = [
                 browser_bin,
                 f"--app={target_url}",
                 f"--user-data-dir={profile_dir}",
                 "--window-size=1260,840",
                 "--window-position=80,40",
-                "--app-id=zalo-desktop-ltm",
-                "--class=ZaloPC",
+                "--app-id=vku-netchat-ltm",
+                "--class=VKUNetChat",
                 "--autoplay-policy=no-user-gesture-required",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -1738,13 +1738,13 @@ def main():
             proc.wait()
             # Nếu tiến trình thoát quá sớm (do Chrome chuyển sang session có sẵn), giữ bridge chạy để duy trì socket
             if time.time() - t_start < 2.0:
-                print("[*] Cửa sổ Zalo PC đang mở trên màn hình...")
+                print("[*] Cửa sổ VKU NetChat đang mở trên màn hình...")
                 while bridge.is_connected:
                     time.sleep(1)
             bridge.is_connected = False
             return
         except KeyboardInterrupt:
-            print("\n[*] Đang đóng Zalo Desktop Client...")
+            print("\n[*] Đang đóng VKU NetChat Client...")
             try:
                 proc.terminate()
             except Exception:
@@ -1759,7 +1759,7 @@ def main():
         import webview
         print("[*] Mở cửa sổ Desktop qua PyWebView...")
         window = webview.create_window(
-            title=f"Zalo PC - Socket TCP 5555 ({server_host})",
+            title=f"VKU NetChat - Socket TCP 5555 ({server_host})",
             url=target_url,
             width=1240,
             height=820,
@@ -1773,7 +1773,7 @@ def main():
 
     # Fallback cuối cùng
     import webbrowser
-    print(f"[*] Mở Zalo trên trình duyệt mặc định: {target_url}")
+    print(f"[*] Mở VKU NetChat trên trình duyệt mặc định: {target_url}")
     webbrowser.open(target_url)
     try:
         while bridge.is_connected:

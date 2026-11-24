@@ -353,20 +353,20 @@ function switchAuthTab(tab) {
     if (btnReg) btnReg.classList.add('active');
     if (extra) extra.style.display = 'flex';
     if (btnSubmit) btnSubmit.innerText = 'Đăng ký tài khoản';
-    if (title) title.innerText = 'Đăng ký Zalo';
+    if (title) title.innerText = 'Đăng ký VKU NetChat';
   } else {
     if (btnReg) btnReg.classList.remove('active');
     if (btnLogin) btnLogin.classList.add('active');
     if (extra) extra.style.display = 'none';
     if (btnSubmit) btnSubmit.innerText = 'Đăng nhập';
-    if (title) title.innerText = 'Đăng nhập Zalo';
+    if (title) title.innerText = 'Đăng nhập VKU NetChat';
   }
 }
 
 async function handleAuthSubmit() {
   const isRegister = document.getElementById('authTabRegister')?.classList.contains('active');
   const serverIp = document.getElementById('authServerIp')?.value.trim() || '127.0.0.1';
-  const serverPort = document.getElementById('authServerPort')?.value.trim() || '8000';
+  const serverPort = document.getElementById('authServerPort')?.value.trim() || '5555';
   const username = document.getElementById('authUsername')?.value.trim();
   const password = document.getElementById('authPassword')?.value.trim();
 
@@ -393,6 +393,8 @@ async function handleAuthSubmit() {
   }
 
   // Lưu cấu hình IP và Port vào LocalStorage
+  localStorage.setItem('vku_server_ip', serverIp);
+  localStorage.setItem('vku_server_port', serverPort);
   localStorage.setItem('zalo_server_ip', serverIp);
   localStorage.setItem('zalo_server_port', serverPort);
 
@@ -422,7 +424,7 @@ async function handleAuthSubmit() {
       const data = await res.json();
       if (res.ok) {
         state.currentUser = data.user;
-        showAlert("Đăng ký thành công! Đang chuyển hướng vào Zalo...", true);
+        showAlert("Đăng ký thành công! Đang chuyển hướng vào VKU NetChat...", true);
         setTimeout(() => {
           window.location.href = '/';
         }, 500);
@@ -446,7 +448,7 @@ async function handleAuthSubmit() {
       const data = await res.json();
       if (res.ok) {
         state.currentUser = data.user;
-        showAlert(`Đăng nhập thành công: ${data.user.display_name}! Đang vào Zalo...`, true);
+        showAlert(`Đăng nhập thành công: ${data.user.display_name}! Đang vào VKU NetChat...`, true);
         setTimeout(() => {
           window.location.href = '/';
         }, 500);
@@ -3109,7 +3111,7 @@ async function searchFriendByPhone(phoneQuery) {
           <div class="alert-icon">🔍</div>
           <div class="alert-text">
             <strong>Không tìm thấy người dùng</strong>
-            <div>Số điện thoại <b>${escapeHtml(phone)}</b> chưa đăng ký tài khoản Zalo hoặc không cho phép tìm kiếm.</div>
+            <div>Số điện thoại <b>${escapeHtml(phone)}</b> chưa đăng ký tài khoản VKU NetChat hoặc không cho phép tìm kiếm.</div>
           </div>
         </div>
       `;
@@ -3141,7 +3143,7 @@ async function openNewChatModal() {
     resultArea.innerHTML = `
       <div class="phone-search-tip">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-        <span>Nhập số điện thoại để tìm kiếm bạn bè trên Zalo</span>
+        <span>Nhập số điện thoại để tìm kiếm bạn bè trên VKU NetChat</span>
       </div>
     `;
   }
@@ -4412,7 +4414,7 @@ async function startWebRTCCall(callType) {
       conversation_id: state.currentConversationId,
       call_type: callType,
       sender_id: state.currentUser?.id,
-      sender_name: state.currentUser?.display_name || "Bạn bè Zalo",
+      sender_name: state.currentUser?.display_name || "Bạn bè VKU NetChat",
       sender_avatar: state.currentUser?.avatar_url || ""
     }));
     playIncomingRingtone();
@@ -4430,7 +4432,7 @@ function handleIncomingCallSignal(signal) {
   const callerAvatar = document.getElementById('incomingCallerAvatar');
   const callSub = document.getElementById('incomingCallSub');
 
-  if (callerName) callerName.innerText = signal.sender_name || "Bạn bè Zalo";
+  if (callerName) callerName.innerText = signal.sender_name || "Bạn bè VKU NetChat";
   if (callerAvatar && signal.sender_avatar) callerAvatar.src = signal.sender_avatar;
   if (callSub) callSub.innerText = signal.call_type === 'video' ? "Cuộc gọi video WebRTC P2P đến..." : "Cuộc gọi thoại WebRTC P2P đến...";
 
@@ -5638,7 +5640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultArea.innerHTML = `
           <div class="phone-search-tip">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-            <span>Nhập số điện thoại để tìm kiếm bạn bè trên Zalo</span>
+            <span>Nhập số điện thoại để tìm kiếm bạn bè trên VKU NetChat</span>
           </div>
         `;
       }
@@ -5888,9 +5890,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnSendManualPing')?.addEventListener('click', sendManualPing);
   document.getElementById('btnClearNetLogs')?.addEventListener('click', clearNetworkLogs);
 
-  // Khôi phục Cấu hình IP và Port đã lưu
-  const savedIp = localStorage.getItem('zalo_server_ip') || window.location.hostname || '127.0.0.1';
-  const savedPort = localStorage.getItem('zalo_server_port') || window.location.port || '8000';
+  // Khôi phục Cấu hình IP và Port đã lưu (Luôn giữ mặc định Socket TCP là 5555)
+  const savedIp = localStorage.getItem('vku_server_ip') || localStorage.getItem('zalo_server_ip') || '127.0.0.1';
+  let savedPort = localStorage.getItem('vku_server_port') || localStorage.getItem('zalo_server_port');
+  if (!savedPort || savedPort === '48000' || savedPort === '8000' || savedPort === window.location.port) {
+    savedPort = '5555';
+  }
   if (document.getElementById('authServerIp')) document.getElementById('authServerIp').value = savedIp;
   if (document.getElementById('authServerPort')) document.getElementById('authServerPort').value = savedPort;
 });

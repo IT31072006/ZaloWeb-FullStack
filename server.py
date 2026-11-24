@@ -2555,10 +2555,10 @@ class ChatServer:
                     try:
                         # Khởi tạo công việc mẫu nếu chưa có
                         if not Task.objects.filter(user=u_curr).exists():
-                            Task.objects.create(user=u_curr, title='Hoàn thành bài tập lớn Lập trình Mạng: Zalo Web Full-Stack', due='23:59 Hôm nay', priority='high', done=False)
+                            Task.objects.create(user=u_curr, title='Hoàn thành bài tập lớn Lập trình Mạng: VKU NetChat Socket TCP', due='23:59 Hôm nay', priority='high', done=False)
                             Task.objects.create(user=u_curr, title='Ôn tập kiến thức Socket TCP/IP và UDP Multicast (Lab 6)', due='Ngày mai', priority='medium', done=False)
                             Task.objects.create(user=u_curr, title='Nộp báo cáo giữa kỳ môn LTM cho cô Camnt', due='25/10/2026', priority='high', done=False)
-                            Task.objects.create(user=u_curr, title='Chuẩn bị slide thuyết trình demo ứng dụng Zalo Desktop', due='Tuần tới', priority='normal', done=True)
+                            Task.objects.create(user=u_curr, title='Chuẩn bị slide thuyết trình demo ứng dụng VKU NetChat Desktop', due='Tuần tới', priority='normal', done=True)
 
                         if action == 'toggle':
                             t_id = packet.get("id")
